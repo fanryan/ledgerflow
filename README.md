@@ -68,10 +68,29 @@ ledgerflow/
       build.gradle
 
   workers/
-    outbox-publisher/
-    transaction-consumer/
-    reconciliation-worker/
-    deadletter-replay-worker/
+    go.mod
+    go.sum
+    cmd/
+      outbox-publisher/
+        main.go
+      transaction-consumer/
+        main.go
+      reconciliation-worker/
+        main.go
+      deadletter-replay-worker/
+        main.go
+    internal/
+      config/
+      kafka/
+      logging/
+      metrics/
+      tracing/
+      db/
+      outbox/
+      consumers/
+      reconciliation/
+      deadletter/
+    Dockerfile
 
   shared/
     schemas/

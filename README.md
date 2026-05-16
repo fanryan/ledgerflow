@@ -45,6 +45,79 @@ Kafka
   +--> Go Dead-Letter Replay Worker
 ```
 
+## Request Workflow
+
+Current implemented flow:
+
+```text
+Client
+  |
+  |  GET /health
+  v
+Spring Boot Ledger API
+  |
+  +--> returns {"status":"ok"}
+
+Client
+  |
+  |  POST /auth/login
+  |  email + password
+  v
+Spring Boot Ledger API
+  |
+  +--> Spring Security allows /auth/login
+  |
+  +--> AuthController
+        |
+        v
+      AuthService
+        |
+        +--> UserRepository
+        |     |
+        |     v
+        |   PostgreSQL users table
+        |
+        +--> BCrypt password check
+        |
+        +--> JwtService
+              |
+              v
+            access token + refresh token
+```
+
+Planned transaction flow:
+
+```text
+Client
+  |
+  |  POST /transactions
+  |  JWT + Idempotency-Key
+  v
+Spring Boot Ledger API
+  |
+  +--> authenticate JWT
+  +--> validate request
+  +--> enforce idempotency
+  +--> apply optimistic concurrency checks
+  +--> write transaction row
+  +--> write balanced ledger entries
+  +--> update account balances
+  +--> write outbox event
+  |
+  v
+PostgreSQL
+  |
+  v
+Go Outbox Publisher
+  |
+  v
+Kafka
+  |
+  +--> Go consumers
+  +--> Reconciliation worker
+  +--> Dead-letter replay worker
+```
+
 ## Repository Structure
 
 ```text
@@ -91,7 +164,7 @@ ledgerflow/
 
 ## Current Status
 
-Current stage: **Milestone 0 - Repository Bootstrap**
+Current stage: **Milestone 1 - API and Authentication Foundation**
 
 Implemented:
 
@@ -99,11 +172,23 @@ Implemented:
 - Docker Compose infrastructure
 - Spring Boot API skeleton
 - `/health` endpoint
+- PostgreSQL connection
+- Flyway migration setup
+- `users` table migration
+- Seed admin user migration
+- Spring Security baseline
+- `/auth/login` endpoint
+- BCrypt password verification
+- JWT access token generation
+- JWT refresh token generation
 
 Next:
 
-- PostgreSQL connection
-- Flyway migration setup
+- Auth error handling
+- JWT validation filter
+- `/auth/refresh` endpoint
+- Account table migration
+- Account creation API
 
 ## Local Development
 
@@ -123,6 +208,27 @@ Delete local infrastructure volumes:
 
 ```bash
 docker compose down -v
+```
+
+Run the API:
+
+```bash
+cd services/ledger-api
+gradle bootRun
+```
+
+Check health:
+
+```bash
+curl http://localhost:8080/health
+```
+
+Log in as the local admin user:
+
+```bash
+curl -X POST http://localhost:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@ledgerflow.local","password":"password"}'
 ```
 
 ## Milestones

@@ -1,6 +1,6 @@
 # LedgerFlow
 
-LedgerFlow is a polyglot transaction processing and reconciliation platform.
+LedgerFlow is a production-inspired transaction processing and reconciliation platform built as a polyglot backend systems project.
 
 The project uses:
 
@@ -116,11 +116,11 @@ Implemented:
 
 - Repository structure
 - Docker Compose infrastructure
+- Spring Boot API skeleton
+- `/health` endpoint
 
 Next:
 
-- Spring Boot API skeleton
-- `/health` endpoint
 - PostgreSQL connection
 - Flyway migration setup
 

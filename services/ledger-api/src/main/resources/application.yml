@@ -17,3 +17,9 @@ server:
 logging:
   level:
     root: INFO
+
+ledgerflow:
+  jwt:
+    secret: "local-development-secret-key-change-later-please-make-this-long"
+    access-token-ttl-minutes: 60
+    refresh-token-ttl-days: 7

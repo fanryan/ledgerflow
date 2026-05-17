@@ -1,5 +1,9 @@
 package com.fanryan.ledgerflow.auth;
 
+import java.util.UUID;
+
+import io.jsonwebtoken.JwtException;
+
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -32,5 +36,21 @@ public class AuthService {
         String refreshToken = jwtService.generateRefreshToken(user);
 
         return new LoginResponse(accessToken, refreshToken);
+    }
+
+    public LoginResponse refresh(RefreshTokenRequest request) {
+        try {
+            UUID userId = jwtService.getUserId(request.refreshToken());
+
+            User user = userRepository.findById(userId)
+                    .orElseThrow(InvalidTokenException::new);
+
+            String accessToken = jwtService.generateAccessToken(user);
+            String refreshToken = jwtService.generateRefreshToken(user);
+
+            return new LoginResponse(accessToken, refreshToken);
+        } catch (JwtException | IllegalArgumentException exception) {
+            throw new InvalidTokenException();
+        }
     }
 }

@@ -1,4 +1,4 @@
-# Auth Deep Dive
+# Auth Implementation
 
 This document explains the current LedgerFlow authentication implementation as it exists today. It is written for resume and interview preparation, so it focuses on how the code works, what decisions were made, and what is still planned.
 
@@ -10,15 +10,19 @@ The Spring Boot API currently supports:
 
 - Public `GET /health`.
 - Public `POST /auth/login`.
+- Public `POST /auth/refresh`.
 - Protected `GET /auth/me`.
 - PostgreSQL-backed `users` table.
 - Seeded local admin user.
 - BCrypt password verification.
 - JWT access token generation.
 - JWT refresh token generation.
+- JWT refresh token validation for the stateless refresh endpoint.
 - JWT parsing and validation for incoming requests.
 - Spring Security `SecurityContext` population from a valid bearer token.
 - Global error handling for invalid credentials.
+- Global error handling for invalid refresh tokens.
+- Auth flow tests covering login, refresh, invalid credentials, invalid tokens, and `/auth/me`.
 
 The current local admin credentials are:
 
@@ -31,8 +35,8 @@ password: password
 
 These are planned but not currently implemented:
 
-- `POST /auth/refresh`.
-- Refresh token validation, rotation, or revocation.
+- Refresh token rotation with persistence.
+- Refresh token revocation.
 - Logout.
 - Token persistence or refresh-token database tracking.
 - Account ownership checks.
@@ -47,6 +51,7 @@ Configured in `services/ledger-api/src/main/java/com/fanryan/ledgerflow/security
 ```text
 GET  /health
 POST /auth/login
+POST /auth/refresh
 ```
 
 ### Protected By Default
@@ -107,7 +112,7 @@ SpringApplication.run(...)
 - Form login disabled.
 - HTTP Basic disabled.
 - Stateless session policy.
-- `/health` and `/auth/login` are public.
+- `/health`, `/auth/login`, and `/auth/refresh` are public.
 - All other endpoints require authentication.
 - `JwtAuthenticationFilter` runs before Spring's `UsernamePasswordAuthenticationFilter`.
 - A `BCryptPasswordEncoder` bean is available for password checks.
@@ -254,7 +259,92 @@ with:
 }
 ```
 
-## 4. JWT Validation Flow
+## 4. Refresh Flow
+
+### Request
+
+`POST /auth/refresh`
+
+```json
+{
+  "refreshToken": "<refresh_token>"
+}
+```
+
+### Step-by-Step
+
+1. `AuthController.refresh(...)` receives the JSON request.
+2. Spring converts the JSON body into `RefreshTokenRequest`.
+3. `AuthController` calls `AuthService.refresh(...)`.
+4. `AuthService` asks `JwtService` to parse the refresh token and extract the user id from the `sub` claim.
+5. If parsing fails because the token is expired, malformed, or signed incorrectly, `InvalidTokenException` is thrown.
+6. If parsing succeeds, `AuthService` loads the user by id through `UserRepository.findById(...)`.
+7. If the user no longer exists, `InvalidTokenException` is thrown.
+8. If the user exists, `JwtService` generates a new access token and a new refresh token.
+9. `AuthService` returns `LoginResponse`.
+
+### Diagram
+
+```text
+Client
+  |
+  | POST /auth/refresh
+  | {"refreshToken":"..."}
+  v
+AuthController
+  |
+  | RefreshTokenRequest
+  v
+AuthService
+  |
+  +--> JwtService.getUserId(refreshToken)
+  |       |
+  |       +--> verify signature
+  |       +--> verify expiry
+  |       +--> read sub claim
+  |
+  +--> UserRepository.findById(userId)
+  |       |
+  |       v
+  |     PostgreSQL users table
+  |
+  +--> JwtService.generateAccessToken(user)
+  |
+  +--> JwtService.generateRefreshToken(user)
+  |
+  v
+LoginResponse
+  |
+  v
+{"accessToken":"...","refreshToken":"..."}
+```
+
+### Failure Path
+
+Bad refresh tokens throw:
+
+```text
+InvalidTokenException
+```
+
+`GlobalExceptionHandler` maps this to:
+
+```text
+HTTP 401
+```
+
+with:
+
+```json
+{
+  "errorCode": "INVALID_TOKEN",
+  "message": "Invalid or expired token",
+  "requestId": "...",
+  "timestamp": "..."
+}
+```
+
+## 5. JWT Validation Flow
 
 For a protected endpoint, clients send:
 
@@ -337,7 +427,7 @@ JwtAuthenticationFilter clears SecurityContextHolder.
 
 The request continues unauthenticated, and protected endpoints are blocked by Spring Security.
 
-## 5. File-by-File Explanation
+## 6. File-by-File Explanation
 
 ### `AuthController.java`
 
@@ -350,9 +440,12 @@ services/ledger-api/src/main/java/com/fanryan/ledgerflow/auth/AuthController.jav
 Defines the auth HTTP endpoints:
 
 - `POST /auth/login`
+- `POST /auth/refresh`
 - `GET /auth/me`
 
 `login(...)` delegates to `AuthService`.
+
+`refresh(...)` delegates to `AuthService` to validate a refresh token and issue a new token pair.
 
 `me(...)` reads the current `Authentication` from Spring Security and returns the user id and role.
 
@@ -363,6 +456,9 @@ Contains login business logic:
 - Load user by email.
 - Verify password with `PasswordEncoder`.
 - Generate access and refresh tokens with `JwtService`.
+- Validate refresh tokens.
+- Load the token subject user from the database.
+- Generate a replacement access and refresh token pair.
 
 This is where authentication rules live, not in the controller.
 
@@ -384,6 +480,12 @@ It contains:
 Specific exception for invalid login attempts.
 
 It avoids throwing generic `IllegalArgumentException` and lets `GlobalExceptionHandler` map failed login to a clean `401`.
+
+### `InvalidTokenException.java`
+
+Specific exception for invalid refresh token attempts.
+
+It lets `GlobalExceptionHandler` map bad, expired, malformed, or unusable refresh tokens to a clean `401`.
 
 ### `JwtProperties.java`
 
@@ -430,6 +532,14 @@ Response DTO for successful login.
 Fields:
 
 - `accessToken`
+- `refreshToken`
+
+### `RefreshTokenRequest.java`
+
+Request DTO for `POST /auth/refresh`.
+
+Fields:
+
 - `refreshToken`
 
 ### `User.java`
@@ -481,6 +591,7 @@ Defines Spring Security behavior:
 
 - Public `/health`.
 - Public `/auth/login`.
+- Public `/auth/refresh`.
 - Everything else authenticated.
 - Stateless sessions.
 - CSRF disabled.
@@ -521,12 +632,30 @@ Global HTTP exception handler.
 Currently handles:
 
 - `InvalidCredentialsException`
+- `InvalidTokenException`
 
 and maps it to:
 
 ```text
 HTTP 401
 ```
+
+### `AuthFlowTest.java`
+
+Test class under:
+
+```text
+services/ledger-api/src/test/java/com/fanryan/ledgerflow/auth/AuthFlowTest.java
+```
+
+It covers:
+
+- login success
+- bad password failure
+- refresh success
+- bad refresh token failure
+- `/auth/me` without a token
+- `/auth/me` with a valid access token
 
 ### `HealthController.java`
 
@@ -572,7 +701,7 @@ The stored password is a BCrypt hash for:
 password
 ```
 
-## 6. Key Spring Concepts
+## 7. Key Spring Concepts
 
 ### `@RestController`
 
@@ -680,7 +809,7 @@ Current implementation:
 BCryptPasswordEncoder
 ```
 
-## 7. Security Design Decisions
+## 8. Security Design Decisions
 
 ### Why `/health` Is Public
 
@@ -689,6 +818,10 @@ Health checks should work without a token so local tools, load balancers, and mo
 ### Why `/auth/login` Is Public
 
 Users cannot already have an access token before logging in. Login must be reachable without authentication.
+
+### Why `/auth/refresh` Is Public
+
+A refresh request happens when the access token may be expired. The endpoint accepts the refresh token in the request body, validates that token, and then issues a new token pair.
 
 ### Why Everything Else Is Authenticated By Default
 
@@ -722,6 +855,12 @@ Raw passwords must never be stored. BCrypt is intentionally slow and salted, mak
 - `exp`: limits token lifetime.
 - `jti`: gives each token a unique id for auditing or future revocation logic.
 
+### Current Refresh Token Limitation
+
+Refresh tokens are currently stateless JWTs. The API validates their signature and expiry, then checks that the user still exists.
+
+The API does not yet persist refresh tokens, revoke them, rotate them with database tracking, or implement logout. Those are planned hardening steps.
+
 ### Why Roles Still Matter With Account Ownership
 
 Account ownership answers:
@@ -738,7 +877,7 @@ What type of user is this?
 
 Both are useful. For example, an `ADMIN` may inspect operational state while a normal `USER` should only access their own accounts.
 
-## 8. Common Debugging Lessons
+## 9. Common Debugging Lessons
 
 ### 401 vs 403
 
@@ -797,12 +936,13 @@ If config classes are outside that package tree, Spring may not discover them.
 If curl returns 404, verify the exact annotation path:
 
 - `@PostMapping("/auth/login")`
+- `@PostMapping("/auth/refresh")`
 - `@GetMapping("/auth/me")`
 - `@GetMapping("/health")`
 
 Also make sure the running app has been restarted after code changes.
 
-## 9. Interview Questions and Answers
+## 10. Interview Questions and Answers
 
 1. **Why use JWT instead of sessions?**  
    JWTs keep the API stateless: each request carries its own signed credential instead of relying on server-side session storage.
@@ -814,7 +954,7 @@ Also make sure the running app has been restarted after code changes.
    It verifies a raw password against a stored BCrypt hash without storing or comparing raw passwords.
 
 4. **How does Spring know which endpoints are public?**  
-   `SecurityConfig` declares `.requestMatchers("/health", "/auth/login").permitAll()`.
+   `SecurityConfig` declares `.requestMatchers("/health", "/auth/login", "/auth/refresh").permitAll()`.
 
 5. **What is stored in the `users` table?**  
    User id, email, password hash, role, created timestamp, and updated timestamp.
@@ -853,7 +993,7 @@ Also make sure the running app has been restarted after code changes.
     It includes subject/user id, role, issued-at time, expiration time, and token id.
 
 17. **What is the difference between access and refresh tokens here?**  
-    The access token is shorter-lived for API calls. The refresh token is longer-lived, but refresh validation is not implemented yet.
+    The access token is shorter-lived for API calls. The refresh token is longer-lived and can be sent to `/auth/refresh` to get a new token pair.
 
 18. **How does `UserRepository.findByEmail` work?**  
     Spring Data JDBC derives a query from the method name and returns an `Optional<User>`.
@@ -864,7 +1004,19 @@ Also make sure the running app has been restarted after code changes.
 20. **Why are roles not enough for future account APIs?**  
     Roles say what type of user is calling. Account ownership checks will still be needed to decide which specific resources that user can access.
 
-## 10. Checklist Before Moving On
+21. **What happens when `/auth/refresh` receives a bad token?**  
+    `JwtService` parsing fails, `AuthService` throws `InvalidTokenException`, and `GlobalExceptionHandler` returns `401` with `INVALID_TOKEN`.
+
+22. **Why does refresh load the user from the database after parsing the token?**  
+    The token proves it was signed by the server, but the database confirms the user still exists.
+
+23. **Are refresh tokens currently revocable?**  
+    Not yet. They are stateless JWTs, so revocation would require future token persistence or deny-listing.
+
+24. **What does `AuthFlowTest` prove?**  
+    It proves the main auth behavior works through Spring MVC and Spring Security: login, refresh, invalid errors, and protected `/auth/me`.
+
+## 11. Checklist Before Moving On
 
 Before starting account APIs, be able to explain:
 
@@ -878,8 +1030,10 @@ Before starting account APIs, be able to explain:
 - [ ] What `SecurityContextHolder` stores after successful JWT validation.
 - [ ] Why authorities are stored as `ROLE_ADMIN`, `ROLE_USER`, or `ROLE_OPERATOR`.
 - [ ] What `/auth/me` proves about the JWT validation flow.
+- [ ] How `/auth/refresh` validates a refresh token and issues a new token pair.
 - [ ] What happens when a token is missing or invalid.
+- [ ] Why invalid refresh tokens return `INVALID_TOKEN`.
 - [ ] How Flyway applies `V1` and `V2` migrations.
 - [ ] Why already-applied migrations should not be edited without resetting local DB.
-- [ ] Why `/auth/refresh` is planned but not implemented yet.
+- [ ] What `AuthFlowTest` covers.
 - [ ] Why account ownership checks will still be needed later.

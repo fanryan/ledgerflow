@@ -102,6 +102,26 @@ Spring Boot Ledger API
         |
         v
       returns current user id + role
+
+Client
+  |
+  |  POST /auth/refresh
+  |  refresh token
+  v
+Spring Boot Ledger API
+  |
+  +--> Spring Security allows /auth/refresh
+  |
+  +--> AuthController
+        |
+        v
+      AuthService
+        |
+        +--> JwtService validates refresh token
+        |
+        +--> UserRepository loads user by token subject
+        |
+        +--> JwtService issues new access + refresh tokens
 ```
 
 Planned transaction flow:
@@ -197,16 +217,18 @@ Implemented:
 - Seed admin user migration
 - Spring Security baseline
 - `/auth/login` endpoint
+- `/auth/refresh` endpoint
 - Auth error handling for invalid credentials
+- Auth error handling for invalid refresh tokens
 - BCrypt password verification
 - JWT access token generation
 - JWT refresh token generation
 - JWT validation filter
 - `/auth/me` authenticated endpoint
+- Auth flow tests for login, refresh, invalid credentials, invalid tokens, and `/auth/me`
 
 Next:
 
-- `/auth/refresh` endpoint
 - Account table migration
 - Account creation API
 
@@ -256,6 +278,21 @@ Check the current authenticated user:
 ```bash
 curl http://localhost:8080/auth/me \
   -H "Authorization: Bearer <access_token>"
+```
+
+Refresh tokens:
+
+```bash
+curl -X POST http://localhost:8080/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken":"<refresh_token>"}'
+```
+
+Run tests:
+
+```bash
+cd services/ledger-api
+gradle test
 ```
 
 ## Milestones

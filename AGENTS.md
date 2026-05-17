@@ -15,6 +15,7 @@ Current implemented Spring Boot slice:
 
 - `GET /health`
 - `POST /auth/login`
+- `POST /auth/refresh`
 - PostgreSQL connection
 - Flyway migrations
 - `users` table
@@ -23,7 +24,8 @@ Current implemented Spring Boot slice:
 - JWT access and refresh token generation
 - JWT validation filter
 - `GET /auth/me`
-- auth error response handling for invalid credentials
+- auth error response handling for invalid credentials and invalid tokens
+- auth flow tests covering login, refresh, invalid credentials, invalid tokens, and `/auth/me`
 
 Planned scope includes account APIs, idempotent transaction submission, double-entry ledger entries, optimistic concurrency, transactional outbox, Go Kafka workers, reconciliation, and dead-letter replay.
 
@@ -63,7 +65,7 @@ docker-compose.yml         Local infrastructure entrypoint
 - Keep configuration in `src/main/resources/application.yml` unless a secret should come from the environment.
 - Do not add JPA/Hibernate unless the project deliberately changes away from Spring Data JDBC.
 - Use a global `@ControllerAdvice` for HTTP exception handling.
-- Map API errors to the standard error response shape: `error_code`, `message`, `request_id`, and `timestamp`.
+- Map API errors to the current standard error response shape: `errorCode`, `message`, `requestId`, and `timestamp`.
 
 Useful commands:
 
@@ -109,10 +111,12 @@ V<number>__description.sql
 
 - `/health` is public.
 - `/auth/login` is public.
+- `/auth/refresh` is public.
 - Application endpoints should require authentication by default.
 - Use BCrypt for password verification. Never store raw passwords.
 - JWT access tokens are short-lived API credentials.
 - JWT refresh tokens are longer-lived credentials for token renewal.
+- Current refresh tokens are stateless JWTs. Rotation/revocation storage is not implemented yet.
 - JWTs should include and preserve the expected claims: `sub` for user id, `role` for authorization, `iat` for issued-at time, `exp` for expiry, and `jti` for token id.
 - Protected endpoints should derive user identity and role from the validated JWT/security context, not from request bodies.
 - Keep stateless API behavior: CSRF, form login, HTTP basic, and server-side sessions should remain disabled unless intentionally changed.
@@ -175,6 +179,14 @@ Check the current authenticated user:
 ```bash
 curl http://localhost:8080/auth/me \
   -H "Authorization: Bearer <access_token>"
+```
+
+Refresh tokens:
+
+```bash
+curl -X POST http://localhost:8080/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken":"<refresh_token>"}'
 ```
 
 ## What Not To Do

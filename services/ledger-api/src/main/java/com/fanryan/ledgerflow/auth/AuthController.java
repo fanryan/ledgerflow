@@ -39,4 +39,10 @@ public class AuthController {
 
         return new CurrentUserResponse(userId, role);
     }
+
+    @PostMapping("/auth/refresh")
+    @ResponseStatus(HttpStatus.OK)
+    public LoginResponse refresh(@RequestBody RefreshTokenRequest request) {
+        return authService.refresh(request);
+    }
 }

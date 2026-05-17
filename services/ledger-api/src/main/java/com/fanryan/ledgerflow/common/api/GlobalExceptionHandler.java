@@ -4,6 +4,7 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 import com.fanryan.ledgerflow.auth.InvalidCredentialsException;
+import com.fanryan.ledgerflow.auth.InvalidTokenException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -21,6 +22,20 @@ public class GlobalExceptionHandler {
     ) {
         return new ErrorResponse(
                 "INVALID_CREDENTIALS",
+                exception.getMessage(),
+                UUID.randomUUID().toString(),
+                OffsetDateTime.now()
+        );
+    }
+
+    @ResponseStatus(HttpStatus.UNAUTHORIZED)
+    @ExceptionHandler(InvalidTokenException.class)
+    public ErrorResponse handleInvalidToken(
+            InvalidTokenException exception,
+            WebRequest request
+    ) {
+        return new ErrorResponse(
+                "INVALID_TOKEN",
                 exception.getMessage(),
                 UUID.randomUUID().toString(),
                 OffsetDateTime.now()

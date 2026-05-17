@@ -21,6 +21,9 @@ Current implemented Spring Boot slice:
 - seeded local admin user
 - BCrypt password verification
 - JWT access and refresh token generation
+- JWT validation filter
+- `GET /auth/me`
+- auth error response handling for invalid credentials
 
 Planned scope includes account APIs, idempotent transaction submission, double-entry ledger entries, optimistic concurrency, transactional outbox, Go Kafka workers, reconciliation, and dead-letter replay.
 
@@ -165,6 +168,13 @@ Log in with the seeded local admin:
 curl -X POST http://localhost:8080/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@ledgerflow.local","password":"password"}'
+```
+
+Check the current authenticated user:
+
+```bash
+curl http://localhost:8080/auth/me \
+  -H "Authorization: Bearer <access_token>"
 ```
 
 ## What Not To Do

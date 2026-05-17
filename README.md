@@ -83,6 +83,25 @@ Spring Boot Ledger API
               |
               v
             access token + refresh token
+
+Client
+  |
+  |  GET /auth/me
+  |  Authorization: Bearer <access_token>
+  v
+Spring Boot Ledger API
+  |
+  +--> JwtAuthenticationFilter
+        |
+        +--> validate JWT signature and expiry
+        +--> read sub and role claims
+        +--> populate Spring SecurityContext
+        |
+        v
+      AuthController
+        |
+        v
+      returns current user id + role
 ```
 
 Planned transaction flow:
@@ -197,14 +216,15 @@ Implemented:
 - Seed admin user migration
 - Spring Security baseline
 - `/auth/login` endpoint
+- Auth error handling for invalid credentials
 - BCrypt password verification
 - JWT access token generation
 - JWT refresh token generation
+- JWT validation filter
+- `/auth/me` authenticated endpoint
 
 Next:
 
-- Auth error handling
-- JWT validation filter
 - `/auth/refresh` endpoint
 - Account table migration
 - Account creation API
@@ -248,6 +268,13 @@ Log in as the local admin user:
 curl -X POST http://localhost:8080/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@ledgerflow.local","password":"password"}'
+```
+
+Check the current authenticated user:
+
+```bash
+curl http://localhost:8080/auth/me \
+  -H "Authorization: Bearer <access_token>"
 ```
 
 ## Milestones

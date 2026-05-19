@@ -2,8 +2,6 @@
 
 This document explains the current LedgerFlow account API implementation. It focuses on what exists today: creating accounts, listing the authenticated user's accounts, and persisting account rows in PostgreSQL.
 
-It does not describe transaction posting or double-entry ledger movement as implemented features. Those are planned next layers.
-
 ## 1. Current Account Scope
 
 ### Implemented

@@ -9,15 +9,11 @@
 .gradle/
 build/
 out/
+bin/
 *.class
 
 # Java / Maven
 target/
-
-# Go
-bin/
-*.test
-coverage.out
 
 # Env / secrets
 .env

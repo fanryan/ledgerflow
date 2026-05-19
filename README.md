@@ -1,14 +1,14 @@
 # LedgerFlow
 
-LedgerFlow is a production-inspired transaction processing and reconciliation platform built as a polyglot backend systems project.
+LedgerFlow is a production-inspired transaction processing and reconciliation platform built as a Spring Boot backend systems project.
 
 The project uses:
 
-- Spring Boot for the synchronous API layer
-- Go for asynchronous infrastructure workers
+- Spring Boot for the API layer, transactional ledger logic, outbox publishing, Kafka consumers, and reconciliation
 - PostgreSQL as the source of truth
 - Kafka for event-driven processing
 - Docker Compose for local infrastructure
+- Testcontainers for future integration tests
 
 ## Goals
 
@@ -35,14 +35,14 @@ Spring Boot Ledger API Service
 PostgreSQL
   |
   v
-Go Outbox Publisher
+Spring Outbox Publisher
   |
   v
 Kafka
   |
-  +--> Go Transaction Consumer
-  +--> Go Reconciliation Worker
-  +--> Go Dead-Letter Replay Worker
+  +--> Spring Kafka Consumers
+  +--> Spring Reconciliation Components
+  +--> Spring Dead-Letter Replay Components
 ```
 
 ## System Flow
@@ -52,11 +52,11 @@ flowchart LR
     Client[Client]
     API[Spring Boot Ledger API]
     DB[(PostgreSQL)]
-    Outbox[Go Outbox Publisher]
+    Outbox[Spring Outbox Publisher]
     Kafka[(Kafka)]
-    TxConsumer[Go Transaction Consumer]
-    Reconciliation[Go Reconciliation Worker]
-    Deadletter[Go Dead-Letter Replay Worker]
+    TxConsumer[Spring Kafka Consumers]
+    Reconciliation[Spring Reconciliation Components]
+    Deadletter[Spring Dead-Letter Replay Components]
 
     Client -->|health, auth, accounts| API
     API -->|source of truth| DB
@@ -116,12 +116,6 @@ ledgerflow/
               fanryan/
                 ledgerflow/
       build.gradle
-
-  workers/
-    outbox-publisher/
-    transaction-consumer/
-    reconciliation-worker/
-    deadletter-replay-worker/
 
   shared/
     schemas/
@@ -285,12 +279,6 @@ gradle test
 - Dead-letter routing
 
 ### Milestone 5
-
-- Go consumers
-- Reconciliation worker
-- Replay tooling
-
-### Milestone 6
 
 - Integration tests
 - Benchmarks

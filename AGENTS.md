@@ -2,10 +2,9 @@
 
 ## Project Overview
 
-LedgerFlow is a production-inspired transaction processing and reconciliation platform built as a polyglot backend systems project.
+LedgerFlow is a production-inspired transaction processing and reconciliation platform built as a Spring Boot backend systems project.
 
-- Spring Boot owns the synchronous API layer.
-- Go owns asynchronous infrastructure workers.
+- Spring Boot owns the API layer, transactional ledger logic, outbox publishing, Kafka consumers, and reconciliation.
 - PostgreSQL is the source of truth.
 - Kafka is used for event-driven processing.
 - Docker Compose runs local infrastructure.
@@ -33,13 +32,13 @@ Current implemented Spring Boot slice:
 - account request validation with clean `400` errors
 - account flow tests covering protected access, creation, listing, invalid currency, and currency normalization
 
-Planned scope includes idempotent transaction submission, double-entry ledger entries, optimistic concurrency, transactional outbox, Go Kafka workers, reconciliation, and dead-letter replay.
+Planned scope includes idempotent transaction submission, double-entry ledger entries, optimistic concurrency, transactional outbox, Spring Kafka consumers, reconciliation, and dead-letter replay.
 
 ## Architecture Rules
 
-- PostgreSQL is the source of truth. Do not treat Kafka, Redis, caches, or worker state as authoritative.
+- PostgreSQL is the source of truth. Do not treat Kafka, caches, or consumer state as authoritative.
 - Spring Boot handles request/response command workflows and transactional orchestration.
-- Go workers handle asynchronous infrastructure workloads such as outbox publishing, Kafka consumption, reconciliation, and dead-letter replay.
+- Spring Boot components handle asynchronous workloads such as outbox publishing, Kafka consumption, reconciliation, and dead-letter replay.
 - Kafka events should be derived from committed database state, usually through the transactional outbox pattern.
 - Keep synchronous business writes and outbox writes in the same PostgreSQL transaction when outbox work begins.
 
@@ -47,9 +46,6 @@ Planned scope includes idempotent transaction submission, double-entry ledger en
 
 ```text
 services/ledger-api/       Spring Boot API service
-workers/                   Go worker module
-workers/cmd/               Go executable entrypoints
-workers/internal/          Shared Go worker packages
 shared/schemas/            Shared event/schema definitions
 infrastructure/            Docker/Kafka/local infra support files
 scripts/                   Local helper scripts
@@ -82,18 +78,13 @@ gradle test
 gradle bootRun
 ```
 
-## Go Worker Conventions
+## Async Processing Conventions
 
-- Work under `workers`.
-- Keep executable entrypoints under `workers/cmd`.
-- Keep shared worker code under `workers/internal`.
-- Expected future entrypoints:
-  - `workers/cmd/outbox-publisher`
-  - `workers/cmd/transaction-consumer`
-  - `workers/cmd/reconciliation-worker`
-  - `workers/cmd/deadletter-replay-worker`
-- Shared packages should be grouped by responsibility, such as config, db, kafka, logging, metrics, tracing, outbox, consumers, reconciliation, and deadletter.
-- Prefer one Go module under `workers/` unless there is a strong reason to split worker modules.
+- Keep asynchronous LedgerFlow components inside the Spring Boot service unless the architecture is deliberately changed later.
+- Outbox publishing should read committed PostgreSQL outbox rows and publish them to Kafka.
+- Kafka consumers should be idempotent and retry-safe.
+- Reconciliation should compare authoritative PostgreSQL state against derived or external state.
+- Dead-letter replay should be explicit, auditable, and safe to retry.
 
 ## Database and Migration Rules
 
@@ -221,9 +212,7 @@ curl http://localhost:8080/accounts \
 - Do not modify application code when asked only for planning, documentation, or explanation.
 - Do not bypass Flyway with manual schema changes except for temporary local debugging.
 - Do not edit already-applied migrations without resetting the local database.
-- Do not make Kafka or Redis the source of truth.
-- Do not put Go worker entrypoints directly under `workers/internal`.
-- Do not put shared Go code under `workers/cmd`.
+- Do not make Kafka or caches the source of truth.
 - Do not make protected application endpoints public by default.
 - Do not store raw passwords, JWT secrets, or production credentials in source control.
-- Do not add transactions, ledger, outbox, Kafka workers, or reconciliation code before the current milestone calls for it.
+- Do not add transactions, ledger, outbox, Kafka consumers, or reconciliation code before the current milestone calls for it.

@@ -1,0 +1,45 @@
+package com.fanryan.ledgerflow.account;
+
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Locale;
+import java.util.UUID;
+
+import org.springframework.stereotype.Service;
+
+@Service
+public class AccountService {
+
+    private final AccountRepository accountRepository;
+
+    public AccountService(AccountRepository accountRepository) {
+        this.accountRepository = accountRepository;
+    }
+
+    public AccountResponse createAccount(UUID ownerUserId, CreateAccountRequest request) {
+        String currency = request.currency().toUpperCase(Locale.ROOT);
+        OffsetDateTime now = OffsetDateTime.now();
+
+        Account account = new Account(
+                UUID.randomUUID(),
+                ownerUserId,
+                currency,
+                AccountStatus.ACTIVE,
+                0,
+                0,
+                now,
+                now
+        );
+
+        Account savedAccount = accountRepository.save(account);
+
+        return AccountResponse.from(savedAccount);
+    }
+
+    public List<AccountResponse> listAccounts(UUID ownerUserId) {
+        return accountRepository.findByOwnerUserId(ownerUserId)
+                .stream()
+                .map(AccountResponse::from)
+                .toList();
+    }
+}

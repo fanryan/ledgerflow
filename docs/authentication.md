@@ -1,4 +1,4 @@
-# Auth Implementation
+# Authentication
 
 This document explains the current LedgerFlow authentication implementation as it exists today. It is written for resume and interview preparation, so it focuses on how the code works, what decisions were made, and what is still planned.
 

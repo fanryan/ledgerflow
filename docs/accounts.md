@@ -1,4 +1,4 @@
-# Account Implementation
+# Accounts
 
 This document explains the current LedgerFlow account API implementation. It focuses on what exists today: creating accounts, listing the authenticated user's accounts, and persisting account rows in PostgreSQL.
 

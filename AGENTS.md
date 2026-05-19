@@ -26,8 +26,13 @@ Current implemented Spring Boot slice:
 - `GET /auth/me`
 - auth error response handling for invalid credentials and invalid tokens
 - auth flow tests covering login, refresh, invalid credentials, invalid tokens, and `/auth/me`
+- `accounts` table
+- `POST /accounts`
+- `GET /accounts`
+- account ownership derived from the authenticated JWT subject
+- account flow tests covering protected access, creation, and listing
 
-Planned scope includes account APIs, idempotent transaction submission, double-entry ledger entries, optimistic concurrency, transactional outbox, Go Kafka workers, reconciliation, and dead-letter replay.
+Planned scope includes account request validation, idempotent transaction submission, double-entry ledger entries, optimistic concurrency, transactional outbox, Go Kafka workers, reconciliation, and dead-letter replay.
 
 ## Architecture Rules
 
@@ -61,6 +66,7 @@ docker-compose.yml         Local infrastructure entrypoint
 - Services should contain business logic and transaction orchestration.
 - Put `@Transactional` boundaries at the service layer only.
 - Repositories should own database access through Spring Data JDBC or explicit JDBC patterns.
+- Protected controllers should derive the current user id from `Authentication.getPrincipal()`, not from request bodies.
 - Keep package names under `com.fanryan.ledgerflow`.
 - Keep configuration in `src/main/resources/application.yml` unless a secret should come from the environment.
 - Do not add JPA/Hibernate unless the project deliberately changes away from Spring Data JDBC.
@@ -106,6 +112,9 @@ V<number>__description.sql
 - For local-only mistakes, resetting with `docker compose down -v` is acceptable.
 - For committed/shared schema evolution, create a new migration instead of rewriting history.
 - PostgreSQL owns authoritative account, transaction, ledger, idempotency, outbox, and reconciliation state.
+- Account rows belong to users through `accounts.owner_user_id`.
+- Account balances are stored in minor units using `balance_minor`.
+- Account updates should preserve optimistic concurrency through the Spring Data `@Version` field.
 
 ## Security Rules
 
@@ -139,6 +148,7 @@ docker compose config
 
 - Future integration tests should use Testcontainers for PostgreSQL and Kafka.
 - Auth tests should cover valid login, invalid login, token generation, and endpoint authorization.
+- Account tests should cover protected access, account creation, ownership from JWT subject, and listing by current user.
 - Ledger tests should cover balanced entries, idempotency, insufficient funds, currency mismatch, reversals, and concurrent transaction races.
 
 ## Local Development Commands
@@ -189,6 +199,22 @@ curl -X POST http://localhost:8080/auth/refresh \
   -d '{"refreshToken":"<refresh_token>"}'
 ```
 
+Create an account:
+
+```bash
+curl -X POST http://localhost:8080/accounts \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -d '{"currency":"USD"}'
+```
+
+List accounts:
+
+```bash
+curl http://localhost:8080/accounts \
+  -H "Authorization: Bearer <access_token>"
+```
+
 ## What Not To Do
 
 - Do not modify application code when asked only for planning, documentation, or explanation.
@@ -199,4 +225,4 @@ curl -X POST http://localhost:8080/auth/refresh \
 - Do not put shared Go code under `workers/cmd`.
 - Do not make protected application endpoints public by default.
 - Do not store raw passwords, JWT secrets, or production credentials in source control.
-- Do not add accounts, transactions, ledger, outbox, Kafka workers, or reconciliation code before the current milestone calls for it.
+- Do not add transactions, ledger, outbox, Kafka workers, or reconciliation code before the current milestone calls for it.

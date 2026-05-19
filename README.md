@@ -122,6 +122,45 @@ Spring Boot Ledger API
         +--> UserRepository loads user by token subject
         |
         +--> JwtService issues new access + refresh tokens
+
+Client
+  |
+  |  POST /accounts
+  |  Authorization: Bearer <access_token>
+  |  {"currency":"USD"}
+  v
+Spring Boot Ledger API
+  |
+  +--> JwtAuthenticationFilter validates access token
+  |
+  +--> AccountController
+        |
+        v
+      AccountService
+        |
+        +--> creates ACTIVE account with zero balance
+        |
+        +--> AccountRepository
+              |
+              v
+            PostgreSQL accounts table
+
+Client
+  |
+  |  GET /accounts
+  |  Authorization: Bearer <access_token>
+  v
+Spring Boot Ledger API
+  |
+  +--> AccountController
+        |
+        v
+      AccountService
+        |
+        +--> AccountRepository.findByOwnerUserId(...)
+              |
+              v
+            returns current user's accounts
 ```
 
 Planned transaction flow:
@@ -203,7 +242,7 @@ ledgerflow/
 
 ## Current Status
 
-Current stage: **Milestone 1 - API and Authentication Foundation**
+Current stage: **Milestone 1 - API, Authentication, and Account Foundation**
 
 Implemented:
 
@@ -226,11 +265,18 @@ Implemented:
 - JWT validation filter
 - `/auth/me` authenticated endpoint
 - Auth flow tests for login, refresh, invalid credentials, invalid tokens, and `/auth/me`
+- `accounts` table migration
+- `POST /accounts` authenticated account creation endpoint
+- `GET /accounts` authenticated account listing endpoint
+- Account ownership derived from JWT subject, not request body
+- Account flow tests for protected access, creation, and listing
 
 Next:
 
-- Account table migration
-- Account creation API
+- Account request validation and better bad-request errors
+- Transaction table migration
+- Ledger entry table migration
+- Transaction posting API
 
 ## Local Development
 
@@ -288,6 +334,22 @@ curl -X POST http://localhost:8080/auth/refresh \
   -d '{"refreshToken":"<refresh_token>"}'
 ```
 
+Create an account:
+
+```bash
+curl -X POST http://localhost:8080/accounts \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -d '{"currency":"USD"}'
+```
+
+List accounts:
+
+```bash
+curl http://localhost:8080/accounts \
+  -H "Authorization: Bearer <access_token>"
+```
+
 Run tests:
 
 ```bash
@@ -302,30 +364,34 @@ gradle test
 - Spring Boot API
 - JWT authentication
 - Account creation
+- Account listing
+
+### Milestone 2
+
 - Transaction posting
 - Double-entry ledger
 
-### Milestone 2
+### Milestone 3
 
 - Idempotency
 - Optimistic concurrency
 - Reversal support
 - Concurrent transaction tests
 
-### Milestone 3
+### Milestone 4
 
 - Transactional outbox
 - Kafka publishing
 - Retry handling
 - Dead-letter routing
 
-### Milestone 4
+### Milestone 5
 
 - Go consumers
 - Reconciliation worker
 - Replay tooling
 
-### Milestone 5
+### Milestone 6
 
 - Integration tests
 - Benchmarks

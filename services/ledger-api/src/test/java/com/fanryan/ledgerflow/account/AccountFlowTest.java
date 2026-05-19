@@ -100,4 +100,37 @@ class AccountFlowTest {
 
         return loginJson.get("accessToken").asText();
     }
+
+    @Test
+    void createAccountWithInvalidCurrencyReturnsBadRequest() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+
+        mockMvc.perform(post("/accounts")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .content("""
+                                {
+                                "currency": "USDD"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_ACCOUNT_REQUEST"))
+                .andExpect(jsonPath("$.message").value("Currency must be a 3-letter code"));
+    }
+
+    @Test
+    void createAccountNormalizesCurrencyToUppercase() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+
+        mockMvc.perform(post("/accounts")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .content("""
+                                {
+                                "currency": "sgd"
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.currency").value("SGD"));
+    }
 }

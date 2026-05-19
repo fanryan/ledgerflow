@@ -5,6 +5,7 @@ import java.util.UUID;
 
 import com.fanryan.ledgerflow.auth.InvalidCredentialsException;
 import com.fanryan.ledgerflow.auth.InvalidTokenException;
+import com.fanryan.ledgerflow.account.InvalidAccountRequestException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -36,6 +37,20 @@ public class GlobalExceptionHandler {
     ) {
         return new ErrorResponse(
                 "INVALID_TOKEN",
+                exception.getMessage(),
+                UUID.randomUUID().toString(),
+                OffsetDateTime.now()
+        );
+    }
+
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(InvalidAccountRequestException.class)
+    public ErrorResponse handleInvalidAccountRequest(
+            InvalidAccountRequestException exception,
+            WebRequest request
+    ) {
+        return new ErrorResponse(
+                "INVALID_ACCOUNT_REQUEST",
                 exception.getMessage(),
                 UUID.randomUUID().toString(),
                 OffsetDateTime.now()

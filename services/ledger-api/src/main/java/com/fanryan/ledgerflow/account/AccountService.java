@@ -17,7 +17,7 @@ public class AccountService {
     }
 
     public AccountResponse createAccount(UUID ownerUserId, CreateAccountRequest request) {
-        String currency = request.currency().toUpperCase(Locale.ROOT);
+        String currency = normalizeCurrency(request.currency());
         OffsetDateTime now = OffsetDateTime.now();
 
         Account account = new Account(
@@ -41,5 +41,19 @@ public class AccountService {
                 .stream()
                 .map(AccountResponse::from)
                 .toList();
+    }
+
+    private String normalizeCurrency(String currency) {
+        if (currency == null || currency.isBlank()) {
+            throw new InvalidAccountRequestException("Currency is required");
+        }
+
+        String normalizedCurrency = currency.trim().toUpperCase(Locale.ROOT);
+
+        if (!normalizedCurrency.matches("[A-Z]{3}")) {
+            throw new InvalidAccountRequestException("Currency must be a 3-letter code");
+        }
+
+        return normalizedCurrency;
     }
 }

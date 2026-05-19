@@ -19,13 +19,14 @@ The Spring Boot API currently supports:
 - New accounts start as `ACTIVE`.
 - New accounts start with `balanceMinor = 0`.
 - Account `version` is annotated with `@Version` for optimistic concurrency support.
-- Account flow tests for authentication, creation, and listing.
+- Account request validation with clean `400` errors.
+- Currency normalization from lowercase or padded input to uppercase.
+- Account flow tests for authentication, creation, listing, invalid currency, and currency normalization.
 
 ### Not Implemented Yet
 
 These are planned, not implemented:
 
-- Request validation with friendly `400` responses for invalid currency.
 - Per-user duplicate account rules.
 - Account freezing or closing endpoints.
 - Balance mutation APIs.
@@ -131,11 +132,11 @@ Authorization: Bearer <access_token>
 4. `AccountController.createAccount(...)` receives `Authentication` and `CreateAccountRequest`.
 5. The controller reads `ownerUserId` from `authentication.getPrincipal()`.
 6. The controller calls `AccountService.createAccount(ownerUserId, request)`.
-7. `AccountService` uppercases the currency using `Locale.ROOT`.
+7. `AccountService` validates and normalizes currency using `normalizeCurrency(...)`.
 8. `AccountService` creates an `Account` record with:
    - random UUID
    - authenticated owner user id
-   - uppercase currency
+   - normalized uppercase currency
    - `ACTIVE` status
    - `balanceMinor = 0`
    - `version = 0`
@@ -166,7 +167,8 @@ AccountController
   v
 AccountService
   |
-  +--> uppercase currency
+  +--> validate currency
+  +--> normalize currency
   +--> create ACTIVE account
   +--> balanceMinor = 0
   |
@@ -306,13 +308,27 @@ It is a thin HTTP adapter. It reads the authenticated user id from `Authenticati
 
 Contains account business logic for the current slice:
 
-- uppercase currency
+- validate required currency
+- validate 3-letter currency format
+- normalize currency
 - create account defaults
 - save account
 - list accounts by owner
 - convert models to responses
 
-This is where future validation and transaction boundaries should live.
+This is where future transaction boundaries should live.
+
+### `InvalidAccountRequestException.java`
+
+Specific exception for invalid account creation requests.
+
+Current examples:
+
+- missing currency
+- blank currency
+- currency that is not exactly three letters
+
+`GlobalExceptionHandler` maps this exception to `400 Bad Request`.
 
 ### `AccountRepository.java`
 
@@ -404,6 +420,8 @@ It covers:
 - created account belongs to the seeded admin user.
 - `GET /accounts` requires authentication.
 - valid JWT can list current user's accounts.
+- invalid currency returns `INVALID_ACCOUNT_REQUEST`.
+- lowercase currency is normalized before saving.
 
 ## 7. Key Spring Concepts
 
@@ -475,15 +493,17 @@ Balances should change through future ledger-backed transaction posting, not thr
 
 The database requires uppercase currency codes. The service normalizes input like `usd` into `USD`.
 
-### Why More Validation Is Still Needed
+### Why Account Validation Exists in the Service
 
-The database currently protects some invalid states, but API clients should eventually receive clean `400` responses before hitting database constraints.
+The database protects invalid states, but API clients should receive clean `400` responses before hitting database constraints.
 
 Examples:
 
 - missing currency
 - currency longer or shorter than 3 characters
-- unsupported currency
+- non-letter currency
+
+Unsupported currency allow-listing is still not implemented. Today, any three-letter alphabetic code is accepted.
 
 ### Why `@Version` Exists Already
 
@@ -537,6 +557,29 @@ docker compose down -v
 
 For committed/shared schema changes, create a new migration.
 
+### Invalid Currency Returns 400
+
+Bad account input is handled before database insert.
+
+Example:
+
+```json
+{
+  "currency": "USDD"
+}
+```
+
+returns:
+
+```json
+{
+  "errorCode": "INVALID_ACCOUNT_REQUEST",
+  "message": "Currency must be a 3-letter code",
+  "requestId": "...",
+  "timestamp": "..."
+}
+```
+
 ## 10. Interview Questions and Answers
 
 1. **What does the account API currently do?**  
@@ -576,7 +619,7 @@ For committed/shared schema changes, create a new migration.
     `200 OK` with a list of `AccountResponse` objects for the current user.
 
 13. **What is not implemented yet for accounts?**  
-    Friendly validation errors, freezing, closing, balance mutations, transactions, and ledger entries.
+    Currency allow-listing, freezing, closing, balance mutations, transactions, and ledger entries.
 
 14. **Why is account creation not allowed to set an opening balance?**  
     Balance changes should go through future ledger-backed transactions to keep accounting auditable.
@@ -588,7 +631,7 @@ For committed/shared schema changes, create a new migration.
     `AccountService` uppercases it before saving.
 
 17. **What happens if currency is invalid length today?**  
-    The database constraint can reject it, but a clean API validation response is still planned.
+    `AccountService` throws `InvalidAccountRequestException`, and the API returns `400` with `INVALID_ACCOUNT_REQUEST`.
 
 18. **Why do account endpoints need tests if curl worked?**  
     Tests protect the flow from regressions and prove behavior through Spring MVC and Spring Security.
@@ -613,5 +656,6 @@ Before starting transaction and ledger tables, be able to explain:
 - [ ] How `AccountRepository.findByOwnerUserId(...)` works.
 - [ ] Why `@Version` is on the `version` field.
 - [ ] What `AccountFlowTest` proves.
+- [ ] How invalid account requests become clean `400` responses.
 - [ ] What is still missing before production-grade account APIs.
 - [ ] Why transaction posting must be ledger-backed instead of directly editing balances.

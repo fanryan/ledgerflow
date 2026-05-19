@@ -45,156 +45,55 @@ Kafka
   +--> Go Dead-Letter Replay Worker
 ```
 
-## Request Workflow
+## System Flow
 
-Current implemented flow:
+```mermaid
+flowchart LR
+    Client[Client]
+    API[Spring Boot Ledger API]
+    DB[(PostgreSQL)]
+    Outbox[Go Outbox Publisher]
+    Kafka[(Kafka)]
+    TxConsumer[Go Transaction Consumer]
+    Reconciliation[Go Reconciliation Worker]
+    Deadletter[Go Dead-Letter Replay Worker]
 
-```text
-Client
-  |
-  |  GET /health
-  v
-Spring Boot Ledger API
-  |
-  +--> returns {"status":"ok"}
-
-Client
-  |
-  |  POST /auth/login
-  |  email + password
-  v
-Spring Boot Ledger API
-  |
-  +--> Spring Security allows /auth/login
-  |
-  +--> AuthController
-        |
-        v
-      AuthService
-        |
-        +--> UserRepository
-        |     |
-        |     v
-        |   PostgreSQL users table
-        |
-        +--> BCrypt password check
-        |
-        +--> JwtService
-              |
-              v
-            access token + refresh token
-
-Client
-  |
-  |  GET /auth/me
-  |  Authorization: Bearer <access_token>
-  v
-Spring Boot Ledger API
-  |
-  +--> JwtAuthenticationFilter
-        |
-        +--> validate JWT signature and expiry
-        +--> read sub and role claims
-        +--> populate Spring SecurityContext
-        |
-        v
-      AuthController
-        |
-        v
-      returns current user id + role
-
-Client
-  |
-  |  POST /auth/refresh
-  |  refresh token
-  v
-Spring Boot Ledger API
-  |
-  +--> Spring Security allows /auth/refresh
-  |
-  +--> AuthController
-        |
-        v
-      AuthService
-        |
-        +--> JwtService validates refresh token
-        |
-        +--> UserRepository loads user by token subject
-        |
-        +--> JwtService issues new access + refresh tokens
-
-Client
-  |
-  |  POST /accounts
-  |  Authorization: Bearer <access_token>
-  |  {"currency":"USD"}
-  v
-Spring Boot Ledger API
-  |
-  +--> JwtAuthenticationFilter validates access token
-  |
-  +--> AccountController
-        |
-        v
-      AccountService
-        |
-        +--> creates ACTIVE account with zero balance
-        |
-        +--> AccountRepository
-              |
-              v
-            PostgreSQL accounts table
-
-Client
-  |
-  |  GET /accounts
-  |  Authorization: Bearer <access_token>
-  v
-Spring Boot Ledger API
-  |
-  +--> AccountController
-        |
-        v
-      AccountService
-        |
-        +--> AccountRepository.findByOwnerUserId(...)
-              |
-              v
-            returns current user's accounts
+    Client -->|health, auth, accounts| API
+    API -->|source of truth| DB
+    DB -->|planned outbox polling| Outbox
+    Outbox -->|planned events| Kafka
+    Kafka --> TxConsumer
+    Kafka --> Reconciliation
+    Kafka --> Deadletter
 ```
 
-Planned transaction flow:
+Implemented request slices:
 
-```text
-Client
-  |
-  |  POST /transactions
-  |  JWT + Idempotency-Key
-  v
-Spring Boot Ledger API
-  |
-  +--> authenticate JWT
-  +--> validate request
-  +--> enforce idempotency
-  +--> apply optimistic concurrency checks
-  +--> write transaction row
-  +--> write balanced ledger entries
-  +--> update account balances
-  +--> write outbox event
-  |
-  v
-PostgreSQL
-  |
-  v
-Go Outbox Publisher
-  |
-  v
-Kafka
-  |
-  +--> Go consumers
-  +--> Reconciliation worker
-  +--> Dead-letter replay worker
+```mermaid
+flowchart LR
+    Client[Client]
+    Security[Spring Security + JWT Filter]
+    Auth[Auth Controller / Service]
+    Accounts[Account Controller / Service]
+    Users[(users table)]
+    AccountTable[(accounts table)]
+
+    Client -->|POST /auth/login| Auth
+    Auth --> Users
+    Auth -->|access + refresh tokens| Client
+
+    Client -->|GET /auth/me| Security
+    Client -->|POST /auth/refresh| Auth
+
+    Security -->|authenticated user id| Accounts
+    Accounts -->|POST /accounts| AccountTable
+    Accounts -->|GET /accounts| AccountTable
 ```
+
+Detailed implementation notes live in:
+
+- [Authentication](docs/authentication.md)
+- [Accounts](docs/accounts.md)
 
 ## Repository Structure
 
@@ -269,11 +168,11 @@ Implemented:
 - `POST /accounts` authenticated account creation endpoint
 - `GET /accounts` authenticated account listing endpoint
 - Account ownership derived from JWT subject, not request body
-- Account flow tests for protected access, creation, and listing
+- Account request validation with clean `400` errors
+- Account flow tests for protected access, creation, listing, invalid currency, and currency normalization
 
 Next:
 
-- Account request validation and better bad-request errors
 - Transaction table migration
 - Ledger entry table migration
 - Transaction posting API

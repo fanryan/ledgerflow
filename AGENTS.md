@@ -30,9 +30,10 @@ Current implemented Spring Boot slice:
 - `POST /accounts`
 - `GET /accounts`
 - account ownership derived from the authenticated JWT subject
-- account flow tests covering protected access, creation, and listing
+- account request validation with clean `400` errors
+- account flow tests covering protected access, creation, listing, invalid currency, and currency normalization
 
-Planned scope includes account request validation, idempotent transaction submission, double-entry ledger entries, optimistic concurrency, transactional outbox, Go Kafka workers, reconciliation, and dead-letter replay.
+Planned scope includes idempotent transaction submission, double-entry ledger entries, optimistic concurrency, transactional outbox, Go Kafka workers, reconciliation, and dead-letter replay.
 
 ## Architecture Rules
 
@@ -148,7 +149,7 @@ docker compose config
 
 - Future integration tests should use Testcontainers for PostgreSQL and Kafka.
 - Auth tests should cover valid login, invalid login, token generation, and endpoint authorization.
-- Account tests should cover protected access, account creation, ownership from JWT subject, and listing by current user.
+- Account tests should cover protected access, account creation, ownership from JWT subject, listing by current user, invalid request handling, and normalization.
 - Ledger tests should cover balanced entries, idempotency, insufficient funds, currency mismatch, reversals, and concurrent transaction races.
 
 ## Local Development Commands

@@ -58,7 +58,7 @@ flowchart LR
     Reconciliation[Spring Reconciliation Components]
     Deadletter[Spring Dead-Letter Replay Components]
 
-    Client -->|health, auth, accounts| API
+    Client -->|health, auth, accounts, transactions| API
     API -->|source of truth| DB
     DB -->|planned outbox polling| Outbox
     Outbox -->|planned events| Kafka
@@ -75,8 +75,11 @@ flowchart LR
     Security[Spring Security + JWT Filter]
     Auth[Auth Controller / Service]
     Accounts[Account Controller / Service]
+    Transactions[Transaction Controller / Service]
     Users[(users table)]
     AccountTable[(accounts table)]
+    TransactionTable[(transactions table)]
+    LedgerTable[(ledger_entries table)]
 
     Client -->|POST /auth/login| Auth
     Auth --> Users
@@ -88,12 +91,18 @@ flowchart LR
     Security -->|authenticated user id| Accounts
     Accounts -->|POST /accounts| AccountTable
     Accounts -->|GET /accounts| AccountTable
+
+    Security -->|authenticated user id| Transactions
+    Transactions -->|ownership check| AccountTable
+    Transactions -->|POST /transactions| TransactionTable
+    Transactions -. planned posting .-> LedgerTable
 ```
 
 Detailed implementation notes live in:
 
 - [Authentication](docs/authentication.md)
 - [Accounts](docs/accounts.md)
+- [Transactions](docs/transactions.md)
 
 ## Repository Structure
 
@@ -135,7 +144,7 @@ ledgerflow/
 
 ## Current Status
 
-Current stage: **Milestone 1 - API, Authentication, and Account Foundation**
+Current stage: **Milestone 2 - Transaction Submission Foundation**
 
 Implemented:
 
@@ -164,12 +173,20 @@ Implemented:
 - Account ownership derived from JWT subject, not request body
 - Account request validation with clean `400` errors
 - Account flow tests for protected access, creation, listing, invalid currency, and currency normalization
+- `transactions` table migration
+- `ledger_entries` table migration
+- `POST /transactions` authenticated transaction submission endpoint
+- Idempotency lookup through `Idempotency-Key`
+- Account ownership check before transaction creation
+- Transaction request validation with clean errors
+- Transaction flow tests for auth, successful submission, idempotency, invalid amount, and currency mismatch
 
 Next:
 
-- Transaction table migration
-- Ledger entry table migration
-- Transaction posting API
+- Double-entry ledger posting
+- Account balance updates
+- Insufficient funds handling
+- Transaction status transition from `PENDING` to `POSTED` or `FAILED`
 
 ## Local Development
 
@@ -243,6 +260,22 @@ curl http://localhost:8080/accounts \
   -H "Authorization: Bearer <access_token>"
 ```
 
+Submit a transaction:
+
+```bash
+curl -X POST http://localhost:8080/transactions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Idempotency-Key: tx-example-001" \
+  -d '{
+    "accountId": "<account_id>",
+    "type": "DEPOSIT",
+    "amountMinor": 1000,
+    "currency": "USD",
+    "description": "Example deposit"
+  }'
+```
+
 Run tests:
 
 ```bash
@@ -261,13 +294,15 @@ gradle test
 
 ### Milestone 2
 
-- Transaction posting
-- Double-entry ledger
+- Transaction command submission
+- Idempotency foundation
+- Ledger table foundation
 
 ### Milestone 3
 
-- Idempotency
+- Double-entry ledger posting
 - Optimistic concurrency
+- Insufficient funds handling
 - Reversal support
 - Concurrent transaction tests
 

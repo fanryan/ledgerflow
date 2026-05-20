@@ -1,0 +1,19 @@
+package com.fanryan.ledgerflow.transaction;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+import org.springframework.data.repository.CrudRepository;
+
+public interface TransactionRepository extends CrudRepository<Transaction, UUID> {
+
+    Optional<Transaction> findByOwnerUserIdAndIdempotencyKey(
+            UUID ownerUserId,
+            String idempotencyKey
+    );
+
+    List<Transaction> findByOwnerUserIdOrderByCreatedAtDesc(UUID ownerUserId);
+
+    List<Transaction> findByAccountIdOrderByCreatedAtDesc(UUID accountId);
+}

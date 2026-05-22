@@ -6,22 +6,30 @@ import java.util.UUID;
 
 import com.fanryan.ledgerflow.account.Account;
 import com.fanryan.ledgerflow.account.AccountRepository;
+import com.fanryan.ledgerflow.ledger.LedgerEntry;
+import com.fanryan.ledgerflow.ledger.LedgerEntryDirection;
+import com.fanryan.ledgerflow.ledger.LedgerEntryRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class TransactionService {
 
     private final TransactionRepository transactionRepository;
     private final AccountRepository accountRepository;
+    private final LedgerEntryRepository ledgerEntryRepository;
 
     public TransactionService(
             TransactionRepository transactionRepository,
-            AccountRepository accountRepository
+            AccountRepository accountRepository,
+            LedgerEntryRepository ledgerEntryRepository
     ) {
         this.transactionRepository = transactionRepository;
         this.accountRepository = accountRepository;
+        this.ledgerEntryRepository = ledgerEntryRepository;
     }
 
+    @Transactional
     public TransactionResponse submitTransaction(
             UUID ownerUserId,
             String idempotencyKey,
@@ -32,14 +40,14 @@ public class TransactionService {
         return transactionRepository
                 .findByOwnerUserIdAndIdempotencyKey(ownerUserId, normalizedIdempotencyKey)
                 .map(TransactionResponse::from)
-                .orElseGet(() -> createNewTransaction(
+                .orElseGet(() -> createAndPostTransaction(
                         ownerUserId,
                         normalizedIdempotencyKey,
                         request
                 ));
     }
 
-    private TransactionResponse createNewTransaction(
+    private TransactionResponse createAndPostTransaction(
             UUID ownerUserId,
             String idempotencyKey,
             CreateTransactionRequest request
@@ -61,7 +69,7 @@ public class TransactionService {
 
         OffsetDateTime now = OffsetDateTime.now();
 
-        Transaction transaction = new Transaction(
+        Transaction pendingTransaction = new Transaction(
                 UUID.randomUUID(),
                 account.id(),
                 ownerUserId,
@@ -76,9 +84,74 @@ public class TransactionService {
                 now
         );
 
-        Transaction savedTransaction = transactionRepository.save(transaction);
+        Transaction savedPendingTransaction = transactionRepository.save(pendingTransaction);
 
-        return TransactionResponse.from(savedTransaction);
+        long newBalanceMinor = calculateNewBalance(
+                account.balanceMinor(),
+                request.type(),
+                request.amountMinor()
+        );
+
+        LedgerEntryDirection direction = ledgerEntryDirectionFor(request.type());
+
+        LedgerEntry ledgerEntry = new LedgerEntry(
+                UUID.randomUUID(),
+                savedPendingTransaction.id(),
+                account.id(),
+                direction,
+                request.amountMinor(),
+                currency,
+                0,
+                now
+        );
+
+        ledgerEntryRepository.save(ledgerEntry);
+
+        Account updatedAccount = account.withBalance(newBalanceMinor, now);
+        accountRepository.save(updatedAccount);
+
+        Transaction postedTransaction = new Transaction(
+                savedPendingTransaction.id(),
+                savedPendingTransaction.accountId(),
+                savedPendingTransaction.ownerUserId(),
+                savedPendingTransaction.idempotencyKey(),
+                savedPendingTransaction.type(),
+                savedPendingTransaction.amountMinor(),
+                savedPendingTransaction.currency(),
+                TransactionStatus.POSTED,
+                savedPendingTransaction.description(),
+                savedPendingTransaction.version(),
+                savedPendingTransaction.createdAt(),
+                now
+        );
+
+        Transaction savedPostedTransaction = transactionRepository.save(postedTransaction);
+
+        return TransactionResponse.from(savedPostedTransaction);
+    }
+
+    private long calculateNewBalance(
+            long currentBalanceMinor,
+            TransactionType type,
+            long amountMinor
+    ) {
+        return switch (type) {
+            case DEPOSIT -> currentBalanceMinor + amountMinor;
+            case WITHDRAWAL -> {
+                if (currentBalanceMinor < amountMinor) {
+                    throw new InsufficientFundsException();
+                }
+
+                yield currentBalanceMinor - amountMinor;
+            }
+        };
+    }
+
+    private LedgerEntryDirection ledgerEntryDirectionFor(TransactionType type) {
+        return switch (type) {
+            case DEPOSIT -> LedgerEntryDirection.CREDIT;
+            case WITHDRAWAL -> LedgerEntryDirection.DEBIT;
+        };
     }
 
     private void validateRequest(CreateTransactionRequest request) {

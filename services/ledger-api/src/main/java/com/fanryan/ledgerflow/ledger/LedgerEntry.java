@@ -4,6 +4,7 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.Version;
 import org.springframework.data.relational.core.mapping.Table;
 
 @Table("ledger_entries")
@@ -14,6 +15,7 @@ public record LedgerEntry(
         LedgerEntryDirection direction,
         long amountMinor,
         String currency,
+        @Version long version,
         OffsetDateTime createdAt
 ) {
 }

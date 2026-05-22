@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -69,7 +70,7 @@ class TransactionFlowTest {
                 .andExpect(jsonPath("$.type").value("DEPOSIT"))
                 .andExpect(jsonPath("$.amountMinor").value(1000))
                 .andExpect(jsonPath("$.currency").value("USD"))
-                .andExpect(jsonPath("$.status").value("PENDING"));
+                .andExpect(jsonPath("$.status").value("POSTED"));
     }
 
     @Test
@@ -202,5 +203,118 @@ class TransactionFlowTest {
         JsonNode loginJson = objectMapper.readTree(loginResponse);
 
         return loginJson.get("accessToken").asText();
+    }
+
+    @Test
+    void depositUpdatesAccountBalance() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+
+        submitDeposit(
+                accessToken,
+                accountId,
+                "tx-deposit-balance-" + UUID.randomUUID()
+        );
+
+        mockMvc.perform(get("/accounts")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == '%s')].balanceMinor".formatted(accountId)).value(1000));
+    }
+
+    @Test
+    void withdrawalUpdatesAccountBalance() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+
+        submitDeposit(
+                accessToken,
+                accountId,
+                "tx-withdraw-seed-" + UUID.randomUUID()
+        );
+
+        submitWithdrawal(
+                accessToken,
+                accountId,
+                "tx-withdraw-" + UUID.randomUUID(),
+                400
+        );
+
+        mockMvc.perform(get("/accounts")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == '%s')].balanceMinor".formatted(accountId)).value(600));
+    }
+
+    @Test
+    void withdrawalWithInsufficientFundsReturnsConflict() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+
+        mockMvc.perform(post("/transactions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .header("Idempotency-Key", "tx-insufficient-" + UUID.randomUUID())
+                        .content("""
+                                {
+                                "accountId": "%s",
+                                "type": "WITHDRAWAL",
+                                "amountMinor": 1000,
+                                "currency": "USD",
+                                "description": "Too much"
+                                }
+                                """.formatted(accountId)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("INSUFFICIENT_FUNDS"))
+                .andExpect(jsonPath("$.message").value("Insufficient funds"));
+    }
+
+    @Test
+    void repeatedIdempotencyKeyDoesNotUpdateBalanceTwice() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+        String idempotencyKey = "tx-idempotent-balance-" + UUID.randomUUID();
+
+        submitDeposit(
+                accessToken,
+                accountId,
+                idempotencyKey
+        );
+
+        submitDeposit(
+                accessToken,
+                accountId,
+                idempotencyKey
+        );
+
+        mockMvc.perform(get("/accounts")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == '%s')].balanceMinor".formatted(accountId)).value(1000));
+    }
+
+    private String submitWithdrawal(
+            String accessToken,
+            String accountId,
+            String idempotencyKey,
+            long amountMinor
+    ) throws Exception {
+        return mockMvc.perform(post("/transactions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .header("Idempotency-Key", idempotencyKey)
+                        .content("""
+                                {
+                                "accountId": "%s",
+                                "type": "WITHDRAWAL",
+                                "amountMinor": %d,
+                                "currency": "USD",
+                                "description": "Test withdrawal"
+                                }
+                                """.formatted(accountId, amountMinor)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
     }
 }

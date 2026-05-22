@@ -18,4 +18,16 @@ public record Account(
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt
 ) {
+    public Account withBalance(long newBalanceMinor, OffsetDateTime updatedAt) {
+        return new Account(
+            id,
+            ownerUserId,
+            currency,
+            status,
+            newBalanceMinor,
+            version,
+            createdAt,
+            updatedAt
+        );
+    }
 }

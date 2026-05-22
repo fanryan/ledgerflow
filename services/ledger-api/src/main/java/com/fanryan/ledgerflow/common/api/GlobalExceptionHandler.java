@@ -9,6 +9,7 @@ import com.fanryan.ledgerflow.auth.InvalidTokenException;
 import com.fanryan.ledgerflow.transaction.AccountNotFoundException;
 import com.fanryan.ledgerflow.transaction.AccountOwnershipException;
 import com.fanryan.ledgerflow.transaction.InvalidTransactionRequestException;
+import com.fanryan.ledgerflow.transaction.InsufficientFundsException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -96,6 +97,20 @@ public class GlobalExceptionHandler {
     ) {
         return new ErrorResponse(
                 "ACCOUNT_FORBIDDEN",
+                exception.getMessage(),
+                UUID.randomUUID().toString(),
+                OffsetDateTime.now()
+        );
+    }
+
+    @ResponseStatus(HttpStatus.CONFLICT)
+    @ExceptionHandler(InsufficientFundsException.class)
+    public ErrorResponse handleInsufficientFunds(
+            InsufficientFundsException exception,
+            WebRequest request
+    ) {
+        return new ErrorResponse(
+                "INSUFFICIENT_FUNDS",
                 exception.getMessage(),
                 UUID.randomUUID().toString(),
                 OffsetDateTime.now()

@@ -5,6 +5,7 @@ CREATE TABLE ledger_entries (
     direction VARCHAR(10) NOT NULL,
     amount_minor BIGINT NOT NULL,
     currency CHAR(3) NOT NULL,
+    version BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT ledger_entries_direction_valid CHECK (direction IN ('DEBIT', 'CREDIT')),

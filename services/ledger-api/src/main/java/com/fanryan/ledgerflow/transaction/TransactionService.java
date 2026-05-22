@@ -9,6 +9,7 @@ import com.fanryan.ledgerflow.account.AccountRepository;
 import com.fanryan.ledgerflow.ledger.LedgerEntry;
 import com.fanryan.ledgerflow.ledger.LedgerEntryDirection;
 import com.fanryan.ledgerflow.ledger.LedgerEntryRepository;
+import com.fanryan.ledgerflow.ledger.SystemAccounts;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -92,20 +93,30 @@ public class TransactionService {
                 request.amountMinor()
         );
 
-        LedgerEntryDirection direction = ledgerEntryDirectionFor(request.type());
-
-        LedgerEntry ledgerEntry = new LedgerEntry(
+        LedgerEntry userLedgerEntry = new LedgerEntry(
                 UUID.randomUUID(),
                 savedPendingTransaction.id(),
                 account.id(),
-                direction,
+                userLedgerEntryDirectionFor(request.type()),
                 request.amountMinor(),
                 currency,
                 0,
                 now
         );
 
-        ledgerEntryRepository.save(ledgerEntry);
+        LedgerEntry systemLedgerEntry = new LedgerEntry(
+                UUID.randomUUID(),
+                savedPendingTransaction.id(),
+                SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID,
+                systemLedgerEntryDirectionFor(request.type()),
+                request.amountMinor(),
+                currency,
+                0,
+                now
+        );
+
+        ledgerEntryRepository.save(userLedgerEntry);
+        ledgerEntryRepository.save(systemLedgerEntry);
 
         Account updatedAccount = account.withBalance(newBalanceMinor, now);
         accountRepository.save(updatedAccount);
@@ -147,10 +158,17 @@ public class TransactionService {
         };
     }
 
-    private LedgerEntryDirection ledgerEntryDirectionFor(TransactionType type) {
+    private LedgerEntryDirection userLedgerEntryDirectionFor(TransactionType type) {
         return switch (type) {
             case DEPOSIT -> LedgerEntryDirection.CREDIT;
             case WITHDRAWAL -> LedgerEntryDirection.DEBIT;
+        };
+    }
+
+    private LedgerEntryDirection systemLedgerEntryDirectionFor(TransactionType type) {
+        return switch (type) {
+            case DEPOSIT -> LedgerEntryDirection.DEBIT;
+            case WITHDRAWAL -> LedgerEntryDirection.CREDIT;
         };
     }
 

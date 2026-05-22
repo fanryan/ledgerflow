@@ -8,6 +8,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,6 +17,10 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+
+import com.fanryan.ledgerflow.ledger.LedgerEntry;
+import com.fanryan.ledgerflow.ledger.LedgerEntryDirection;
+import com.fanryan.ledgerflow.ledger.LedgerEntryRepository;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -25,6 +31,9 @@ class TransactionFlowTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private LedgerEntryRepository ledgerEntryRepository;
 
     @Test
     void submitTransactionRequiresAuthentication() throws Exception {
@@ -291,6 +300,75 @@ class TransactionFlowTest {
                         .header("Authorization", "Bearer " + accessToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.id == '%s')].balanceMinor".formatted(accountId)).value(1000));
+    }
+
+    @Test
+    void depositCreatesBalancedLedgerEntries() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+
+        String response = submitDeposit(
+                accessToken,
+                accountId,
+                "tx-balanced-deposit-" + UUID.randomUUID()
+        );
+
+        UUID transactionId = UUID.fromString(objectMapper.readTree(response).get("id").asText());
+
+        List<LedgerEntry> entries = ledgerEntryRepository.findByTransactionId(transactionId);
+
+        assertThat(entries).hasSize(2);
+
+        long totalDebits = entries.stream()
+                .filter(entry -> entry.direction() == LedgerEntryDirection.DEBIT)
+                .mapToLong(LedgerEntry::amountMinor)
+                .sum();
+
+        long totalCredits = entries.stream()
+                .filter(entry -> entry.direction() == LedgerEntryDirection.CREDIT)
+                .mapToLong(LedgerEntry::amountMinor)
+                .sum();
+
+        assertThat(totalDebits).isEqualTo(1000);
+        assertThat(totalCredits).isEqualTo(1000);
+    }
+
+    @Test
+    void withdrawalCreatesBalancedLedgerEntries() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+
+        submitDeposit(
+                accessToken,
+                accountId,
+                "tx-balanced-withdraw-seed-" + UUID.randomUUID()
+        );
+
+        String response = submitWithdrawal(
+                accessToken,
+                accountId,
+                "tx-balanced-withdrawal-" + UUID.randomUUID(),
+                400
+        );
+
+        UUID transactionId = UUID.fromString(objectMapper.readTree(response).get("id").asText());
+
+        List<LedgerEntry> entries = ledgerEntryRepository.findByTransactionId(transactionId);
+
+        assertThat(entries).hasSize(2);
+
+        long totalDebits = entries.stream()
+                .filter(entry -> entry.direction() == LedgerEntryDirection.DEBIT)
+                .mapToLong(LedgerEntry::amountMinor)
+                .sum();
+
+        long totalCredits = entries.stream()
+                .filter(entry -> entry.direction() == LedgerEntryDirection.CREDIT)
+                .mapToLong(LedgerEntry::amountMinor)
+                .sum();
+
+        assertThat(totalDebits).isEqualTo(400);
+        assertThat(totalCredits).isEqualTo(400);
     }
 
     private String submitWithdrawal(

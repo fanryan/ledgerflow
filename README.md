@@ -95,7 +95,7 @@ flowchart LR
     Security -->|authenticated user id| Transactions
     Transactions -->|ownership check| AccountTable
     Transactions -->|POST /transactions| TransactionTable
-    Transactions -->|ledger entry| LedgerTable
+    Transactions -->|balanced ledger entries| LedgerTable
     Transactions -->|balance update| AccountTable
 ```
 
@@ -145,7 +145,7 @@ ledgerflow/
 
 ## Current Status
 
-Current stage: **Milestone 2 - Ledger-Backed Transaction Posting Foundation**
+Current stage: **Milestone 3 - Double-Entry Transaction Posting Foundation**
 
 Implemented:
 
@@ -183,13 +183,13 @@ Implemented:
 - Transaction flow tests for auth, successful submission, idempotency, invalid amount, and currency mismatch
 - Transaction posting updates account balances
 - Successful transactions return `POSTED`
-- Deposit and withdrawal ledger entries are created
+- Deposit and withdrawal create balanced ledger entries
+- USD settlement system account is seeded for offset entries
 - Insufficient funds returns `409`
 - Idempotent retries do not update balances twice
 
 Next:
 
-- Double-entry ledger posting
 - Transaction status transition to `FAILED` for failed posting attempts
 - Reversal support
 - Concurrency tests for simultaneous withdrawals
@@ -308,6 +308,7 @@ gradle test
 ### Milestone 3
 
 - Double-entry ledger posting
+- System settlement account
 - Optimistic concurrency
 - Reversal support
 - Concurrent transaction tests

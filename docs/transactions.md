@@ -1,8 +1,8 @@
 # Transactions
 
-This document explains the current LedgerFlow transaction posting foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating ledger entries, updating account balances, and returning `POSTED` transaction rows.
+This document explains the current LedgerFlow transaction posting foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, and returning `POSTED` transaction rows.
 
-It does not describe full double-entry accounting as an implemented feature. The current implementation creates one account-facing ledger entry per posted transaction. Full double-entry balancing with an offset/internal account is planned next.
+The current implementation creates two balanced ledger entries per posted transaction: one for the user account and one for the seeded USD settlement system account.
 
 ## 1. Current Transaction Scope
 
@@ -24,16 +24,18 @@ The Spring Boot API currently supports:
 - Deposits increase account balance.
 - Withdrawals decrease account balance.
 - Insufficient withdrawals return `409 INSUFFICIENT_FUNDS`.
-- Ledger entries are written for deposits and withdrawals.
+- Balanced ledger entries are written for deposits and withdrawals.
+- USD settlement system account seeded by `V6__seed_system_account.sql`.
+- `SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID` centralizes the settlement account UUID in Java.
 - Java models and repositories for `Transaction` and `LedgerEntry`.
-- Transaction flow tests for auth, successful submission, idempotency, invalid amount, currency mismatch, balance updates, insufficient funds, and idempotent retry balance safety.
+- Transaction flow tests for auth, successful submission, idempotency, invalid amount, currency mismatch, balance updates, insufficient funds, idempotent retry balance safety, and balanced ledger entries.
 
 ### Not Implemented Yet
 
 These are planned, not implemented:
 
 - Marking transactions `FAILED` after business-rule failures.
-- Full double-entry balancing with offset/internal accounts.
+- Richer system-account modeling beyond the seeded USD settlement account.
 - Transaction reversal.
 - Outbox events for posted transactions.
 - Kafka publishing or consumption.
@@ -78,7 +80,7 @@ Current successful response:
 }
 ```
 
-The transaction is returned as `POSTED` after the ledger entry is written and the account balance is updated.
+The transaction is returned as `POSTED` after the balanced ledger entries are written and the account balance is updated.
 
 ## 3. Runtime Flow
 
@@ -115,7 +117,8 @@ TransactionService
   +--> verify currency matches account currency
   +--> save PENDING transaction
   +--> calculate new balance
-  +--> create ledger entry
+  +--> create user ledger entry
+  +--> create settlement ledger entry
   +--> save updated account balance
   +--> update transaction to POSTED
   |
@@ -151,14 +154,14 @@ First request
   |
   +--> no existing owner/key row
   +--> create transaction A
-  +--> create ledger entry
+  +--> create balanced ledger entries
   +--> update account balance
 
 Second request with same owner/key
   |
   +--> transaction A already exists
   +--> return transaction A
-  +--> no additional ledger entry
+  +--> no additional ledger entries
   +--> no additional balance update
 ```
 
@@ -219,7 +222,32 @@ Important indexes:
 - `idx_ledger_entries_transaction_id`
 - `idx_ledger_entries_account_created_at`
 
-The current service writes one ledger entry for each newly posted transaction.
+The current service writes two ledger entries for each newly posted transaction:
+
+- user account entry
+- USD settlement system account entry
+
+The debit total and credit total for each transaction should match.
+
+### System Settlement Account
+
+Seeded by:
+
+```text
+services/ledger-api/src/main/resources/db/migration/V6__seed_system_account.sql
+```
+
+Referenced in Java through:
+
+```text
+services/ledger-api/src/main/java/com/fanryan/ledgerflow/ledger/SystemAccounts.java
+```
+
+Current constant:
+
+```java
+SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID
+```
 
 ## 6. File-by-File Explanation
 
@@ -251,13 +279,12 @@ Contains transaction command business logic:
 - enforce currency match
 - save `PENDING` transaction
 - calculate the new account balance
-- create a ledger entry
+- create user ledger entry
+- create settlement ledger entry
 - save the updated account
 - update the transaction to `POSTED`
 
 It is wrapped in `@Transactional` so transaction creation, ledger entry creation, account balance update, and status update succeed or fail together.
-
-Current limitation: it creates one account-facing ledger entry per transaction, not a full balanced double-entry pair.
 
 ### `TransactionRepository.java`
 
@@ -394,6 +421,18 @@ Enum:
 - `DEBIT`
 - `CREDIT`
 
+### `SystemAccounts.java`
+
+Defines known system account ids used by ledger posting.
+
+Current constant:
+
+```java
+USD_SETTLEMENT_ACCOUNT_ID
+```
+
+This points to the seeded USD settlement account used for offset entries.
+
 ## 7. Design Decisions
 
 ### Why Idempotency Uses a Header
@@ -424,18 +463,42 @@ This prevents users from posting transactions to accounts they do not own.
 
 ### Why Transactions Are Saved As `PENDING` First
 
-The service first records the accepted command as `PENDING`, then creates the ledger entry, updates the balance, and saves the transaction as `POSTED`.
+The service first records the accepted command as `PENDING`, then creates the balanced ledger entries, updates the balance, and saves the transaction as `POSTED`.
 
 Because the method is `@Transactional`, these steps are committed together.
 
-### Why This Is Not Full Double-Entry Yet
+### Why A Settlement Account Exists
 
-The current implementation creates one ledger entry against the user account:
+Double-entry needs both sides of a movement. LedgerFlow uses a seeded USD settlement system account as the offset side for the current implementation.
+
+Deposit:
+
+```text
+user account            CREDIT
+USD settlement account  DEBIT
+```
+
+Withdrawal:
+
+```text
+user account            DEBIT
+USD settlement account  CREDIT
+```
+
+This keeps each transaction balanced:
+
+```text
+total debits == total credits
+```
+
+Richer system-account modeling is still future work.
+
+### Ledger Directions Today
 
 - `DEPOSIT` -> `CREDIT`
 - `WITHDRAWAL` -> `DEBIT`
 
-Full double-entry should create balanced entries, likely involving an internal settlement/cash account.
+Those directions describe the user account entry. The settlement account receives the opposite direction.
 
 ## 8. Common Debugging Lessons
 
@@ -468,13 +531,13 @@ When this happens, check the application logs or test report for the underlying 
 ## 9. Interview Questions and Answers
 
 1. **What does the transaction endpoint currently do?**  
-   It accepts an authenticated transaction command, creates a ledger entry, updates the account balance, and returns a `POSTED` transaction.
+   It accepts an authenticated transaction command, creates balanced ledger entries, updates the account balance, and returns a `POSTED` transaction.
 
 2. **Does it update account balances today?**  
    Yes. Deposits increase balance and withdrawals decrease balance.
 
 3. **Does it create ledger entries today?**  
-   Yes. It creates one account-facing ledger entry per posted transaction.
+   Yes. It creates two balanced ledger entries per posted transaction.
 
 4. **Why use an `Idempotency-Key` header?**  
    It lets clients safely retry the same request without creating duplicate transactions.
@@ -515,12 +578,15 @@ When this happens, check the application logs or test report for the underlying 
 16. **What happens on insufficient funds?**  
     The service throws `InsufficientFundsException`, and the API returns `409 INSUFFICIENT_FUNDS`.
 
-17. **Why is this not full double-entry yet?**  
-    It creates one account-facing ledger entry. Full double-entry needs balanced debit and credit entries across accounts.
+17. **How does double-entry work here today?**  
+    Deposits credit the user account and debit the USD settlement account. Withdrawals debit the user account and credit the USD settlement account.
+
+18. **What does the balanced ledger test prove?**  
+    For a transaction, total debits equal total credits.
 
 ## 10. Checklist Before Moving On
 
-Before implementing full double-entry posting, be able to explain:
+Before moving on to reversals or outbox, be able to explain:
 
 - [ ] Why `POST /transactions` requires authentication.
 - [ ] Why idempotency key lives in a header.
@@ -530,7 +596,9 @@ Before implementing full double-entry posting, be able to explain:
 - [ ] Why transactions are saved as `PENDING` first and then updated to `POSTED`.
 - [ ] What the `transactions` table stores.
 - [ ] What the `ledger_entries` table stores.
+- [ ] Why the USD settlement system account exists.
+- [ ] How deposit ledger directions differ from withdrawal directions.
 - [ ] Why `Transaction` has `@Version`.
 - [ ] What `TransactionFlowTest` proves.
 - [ ] How idempotent retries avoid double balance updates.
-- [ ] Why this is ledger-backed but not full double-entry yet.
+- [ ] How balanced ledger entries preserve `total debits == total credits`.

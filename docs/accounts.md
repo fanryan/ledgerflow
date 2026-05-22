@@ -27,8 +27,7 @@ These are planned, not implemented:
 
 - Per-user duplicate account rules.
 - Account freezing or closing endpoints.
-- Account freezing or closing endpoints.
-- Full double-entry ledger entries.
+- Richer system-account modeling.
 - Transactional outbox events.
 - Kafka publishing.
 - Reconciliation.
@@ -615,7 +614,7 @@ returns:
     `200 OK` with a list of `AccountResponse` objects for the current user.
 
 13. **What is not implemented yet for accounts?**  
-    Currency allow-listing, freezing, closing, full double-entry accounting, reversals, and concurrency hardening.
+    Currency allow-listing, freezing, closing, richer system-account modeling, reversals, and concurrency hardening.
 
 14. **Why is account creation not allowed to set an opening balance?**  
     Balance changes go through transaction posting to keep account movement auditable.

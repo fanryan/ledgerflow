@@ -27,10 +27,8 @@ These are planned, not implemented:
 
 - Per-user duplicate account rules.
 - Account freezing or closing endpoints.
-- Balance mutation APIs.
-- Transaction posting.
-- Double-entry ledger entries.
-- Idempotency keys.
+- Account freezing or closing endpoints.
+- Full double-entry ledger entries.
 - Transactional outbox events.
 - Kafka publishing.
 - Reconciliation.
@@ -485,7 +483,7 @@ This prevents a caller from creating accounts for another user by spoofing a use
 
 ### Why New Accounts Start With Zero Balance
 
-Balances should change through future ledger-backed transaction posting, not through account creation.
+Balances change through transaction posting, not through account creation.
 
 ### Why Currency Is Uppercased in the Service
 
@@ -617,10 +615,10 @@ returns:
     `200 OK` with a list of `AccountResponse` objects for the current user.
 
 13. **What is not implemented yet for accounts?**  
-    Currency allow-listing, freezing, closing, balance mutations, transactions, and ledger entries.
+    Currency allow-listing, freezing, closing, full double-entry accounting, reversals, and concurrency hardening.
 
 14. **Why is account creation not allowed to set an opening balance?**  
-    Balance changes should go through future ledger-backed transactions to keep accounting auditable.
+    Balance changes go through transaction posting to keep account movement auditable.
 
 15. **What does the accounts table foreign key enforce?**  
     Every account owner must exist in the `users` table.
@@ -642,7 +640,7 @@ returns:
 
 ## 11. Checklist Before Moving On
 
-Before starting transaction and ledger tables, be able to explain:
+Before extending account behavior, be able to explain:
 
 - [ ] Why account endpoints are protected.
 - [ ] How JWT authentication reaches `AccountController`.
@@ -656,4 +654,4 @@ Before starting transaction and ledger tables, be able to explain:
 - [ ] What `AccountFlowTest` proves.
 - [ ] How invalid account requests become clean `400` responses.
 - [ ] What is still missing before production-grade account APIs.
-- [ ] Why transaction posting must be ledger-backed instead of directly editing balances.
+- [ ] Why balance changes go through transactions instead of account creation.

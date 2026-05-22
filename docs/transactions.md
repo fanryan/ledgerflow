@@ -1,8 +1,8 @@
 # Transactions
 
-This document explains the current LedgerFlow transaction submission foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, and storing `PENDING` transaction rows.
+This document explains the current LedgerFlow transaction posting foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating ledger entries, updating account balances, and returning `POSTED` transaction rows.
 
-It does not describe balance mutation or double-entry ledger posting as implemented features. The `ledger_entries` table and Java model exist as foundation, but transaction posting into balanced ledger entries is planned next.
+It does not describe full double-entry accounting as an implemented feature. The current implementation creates one account-facing ledger entry per posted transaction. Full double-entry balancing with an offset/internal account is planned next.
 
 ## 1. Current Transaction Scope
 
@@ -20,19 +20,20 @@ The Spring Boot API currently supports:
 - Transaction currency validation against the account currency.
 - Request validation for required account id, type, positive amount, currency, and idempotency key.
 - Transaction rows created as `PENDING`.
+- Successful transactions updated to `POSTED`.
+- Deposits increase account balance.
+- Withdrawals decrease account balance.
+- Insufficient withdrawals return `409 INSUFFICIENT_FUNDS`.
+- Ledger entries are written for deposits and withdrawals.
 - Java models and repositories for `Transaction` and `LedgerEntry`.
-- Transaction flow tests for auth, successful submission, idempotency, invalid amount, and currency mismatch.
+- Transaction flow tests for auth, successful submission, idempotency, invalid amount, currency mismatch, balance updates, insufficient funds, and idempotent retry balance safety.
 
 ### Not Implemented Yet
 
 These are planned, not implemented:
 
-- Creating debit/credit ledger entries from a transaction.
-- Updating account balances.
-- Marking transactions `POSTED` after successful ledger posting.
 - Marking transactions `FAILED` after business-rule failures.
-- Insufficient funds handling.
-- Withdrawal posting rules.
+- Full double-entry balancing with offset/internal accounts.
 - Transaction reversal.
 - Outbox events for posted transactions.
 - Kafka publishing or consumption.
@@ -72,12 +73,12 @@ Current successful response:
   "type": "DEPOSIT",
   "amountMinor": 1000,
   "currency": "USD",
-  "status": "PENDING",
+  "status": "POSTED",
   "description": "Test deposit"
 }
 ```
 
-The transaction remains `PENDING` because ledger posting is not implemented yet.
+The transaction is returned as `POSTED` after the ledger entry is written and the account balance is updated.
 
 ## 3. Runtime Flow
 
@@ -113,9 +114,13 @@ TransactionService
   +--> normalize currency
   +--> verify currency matches account currency
   +--> save PENDING transaction
+  +--> calculate new balance
+  +--> create ledger entry
+  +--> save updated account balance
+  +--> update transaction to POSTED
   |
   v
-PostgreSQL transactions table
+PostgreSQL transactions, ledger_entries, and accounts tables
 ```
 
 ## 4. Idempotency Flow
@@ -146,14 +151,18 @@ First request
   |
   +--> no existing owner/key row
   +--> create transaction A
+  +--> create ledger entry
+  +--> update account balance
 
 Second request with same owner/key
   |
   +--> transaction A already exists
   +--> return transaction A
+  +--> no additional ledger entry
+  +--> no additional balance update
 ```
 
-Current note: the controller still returns `201 Created` for both first and repeated idempotent submissions because it is annotated with `@ResponseStatus(HttpStatus.CREATED)`. The important behavior today is duplicate prevention and same-result return.
+Current note: the controller still returns `201 Created` for both first and repeated idempotent submissions because it is annotated with `@ResponseStatus(HttpStatus.CREATED)`. The important behavior today is duplicate prevention, same-result return, and no duplicate balance movement.
 
 ## 5. Database Design
 
@@ -203,13 +212,14 @@ Important columns:
 - `amount_minor`: positive minor-unit amount.
 - `currency`: three-letter uppercase currency code.
 - `created_at`: timestamp.
+- `version`: optimistic concurrency field.
 
 Important indexes:
 
 - `idx_ledger_entries_transaction_id`
 - `idx_ledger_entries_account_created_at`
 
-The ledger table exists now, but no code writes ledger entries yet.
+The current service writes one ledger entry for each newly posted transaction.
 
 ## 6. File-by-File Explanation
 
@@ -240,8 +250,14 @@ Contains transaction command business logic:
 - enforce account ownership
 - enforce currency match
 - save `PENDING` transaction
+- calculate the new account balance
+- create a ledger entry
+- save the updated account
+- update the transaction to `POSTED`
 
-It does not yet post ledger entries or mutate balances.
+It is wrapped in `@Transactional` so transaction creation, ledger entry creation, account balance update, and status update succeed or fail together.
+
+Current limitation: it creates one account-facing ledger entry per transaction, not a full balanced double-entry pair.
 
 ### `TransactionRepository.java`
 
@@ -314,7 +330,7 @@ Enum:
 - `POSTED`
 - `FAILED`
 
-Only `PENDING` is produced today.
+Successful submissions currently return `POSTED`. The service still creates a `PENDING` transaction first, then updates it to `POSTED` inside the same database transaction.
 
 ### `InvalidTransactionRequestException.java`
 
@@ -360,7 +376,7 @@ Mapped to:
 
 Spring Data JDBC model for the `ledger_entries` table.
 
-No service currently writes this model.
+`TransactionService` writes this model when a new transaction is posted.
 
 ### `LedgerEntryRepository.java`
 
@@ -406,15 +422,20 @@ account.ownerUserId == authenticated user id
 
 This prevents users from posting transactions to accounts they do not own.
 
-### Why Transactions Start As `PENDING`
+### Why Transactions Are Saved As `PENDING` First
 
-The current endpoint records the command, but does not yet perform full ledger posting.
+The service first records the accepted command as `PENDING`, then creates the ledger entry, updates the balance, and saves the transaction as `POSTED`.
 
-Later, successful posting should create balanced ledger entries, update balances, and mark the transaction `POSTED`.
+Because the method is `@Transactional`, these steps are committed together.
 
-### Why Ledger Entries Exist Before Posting Logic
+### Why This Is Not Full Double-Entry Yet
 
-The table and Java model create the accounting foundation. The next implementation step can focus on business logic instead of schema design.
+The current implementation creates one ledger entry against the user account:
+
+- `DEPOSIT` -> `CREDIT`
+- `WITHDRAWAL` -> `DEBIT`
+
+Full double-entry should create balanced entries, likely involving an internal settlement/cash account.
 
 ## 8. Common Debugging Lessons
 
@@ -423,6 +444,8 @@ The table and Java model create the accounting foundation. The next implementati
 If a test or curl request reuses the same `Idempotency-Key`, the API should return the existing transaction.
 
 That is correct behavior. Use a unique key when testing new transaction creation.
+
+Idempotent retries must also avoid duplicate balance updates. The tests verify this.
 
 ### Java-Generated UUIDs Need `@Version`
 
@@ -445,13 +468,13 @@ When this happens, check the application logs or test report for the underlying 
 ## 9. Interview Questions and Answers
 
 1. **What does the transaction endpoint currently do?**  
-   It accepts an authenticated transaction command and stores it as a `PENDING` transaction.
+   It accepts an authenticated transaction command, creates a ledger entry, updates the account balance, and returns a `POSTED` transaction.
 
 2. **Does it update account balances today?**  
-   No. Balance mutation is planned for the ledger posting step.
+   Yes. Deposits increase balance and withdrawals decrease balance.
 
 3. **Does it create ledger entries today?**  
-   No. The ledger table/model exists, but no service writes entries yet.
+   Yes. It creates one account-facing ledger entry per posted transaction.
 
 4. **Why use an `Idempotency-Key` header?**  
    It lets clients safely retry the same request without creating duplicate transactions.
@@ -477,11 +500,11 @@ When this happens, check the application logs or test report for the underlying 
 11. **Why does `Transaction` have `@Version`?**  
     It helps Spring Data JDBC insert Java-generated UUID rows correctly and prepares for optimistic concurrency.
 
-12. **Why does the response status remain `PENDING`?**  
-    The command is accepted, but ledger posting has not been implemented yet.
+12. **Why does the service save a `PENDING` transaction first?**  
+    It records the command before posting, then updates the transaction to `POSTED` inside the same database transaction.
 
-13. **What will make a transaction `POSTED` later?**  
-    Successful balanced ledger entry creation and balance update.
+13. **What makes a transaction `POSTED` today?**  
+    Successful ledger entry creation and account balance update.
 
 14. **What will make a transaction `FAILED` later?**  
     Business-rule failure such as insufficient funds or invalid posting state.
@@ -489,18 +512,25 @@ When this happens, check the application logs or test report for the underlying 
 15. **Why separate `transactions` from `ledger_entries`?**  
     Transactions are user commands; ledger entries are accounting facts.
 
+16. **What happens on insufficient funds?**  
+    The service throws `InsufficientFundsException`, and the API returns `409 INSUFFICIENT_FUNDS`.
+
+17. **Why is this not full double-entry yet?**  
+    It creates one account-facing ledger entry. Full double-entry needs balanced debit and credit entries across accounts.
+
 ## 10. Checklist Before Moving On
 
-Before implementing ledger posting, be able to explain:
+Before implementing full double-entry posting, be able to explain:
 
 - [ ] Why `POST /transactions` requires authentication.
 - [ ] Why idempotency key lives in a header.
 - [ ] How repeated idempotency keys return the same transaction.
 - [ ] Why account ownership is checked after loading the account.
 - [ ] Why transaction currency must match account currency.
-- [ ] Why transactions currently start as `PENDING`.
+- [ ] Why transactions are saved as `PENDING` first and then updated to `POSTED`.
 - [ ] What the `transactions` table stores.
-- [ ] What the `ledger_entries` table will store.
+- [ ] What the `ledger_entries` table stores.
 - [ ] Why `Transaction` has `@Version`.
 - [ ] What `TransactionFlowTest` proves.
-- [ ] What is still missing before real money movement is implemented.
+- [ ] How idempotent retries avoid double balance updates.
+- [ ] Why this is ledger-backed but not full double-entry yet.

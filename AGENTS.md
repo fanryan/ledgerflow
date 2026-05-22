@@ -37,8 +37,13 @@ Current implemented Spring Boot slice:
 - idempotency lookup through `Idempotency-Key`
 - transaction ownership and currency validation
 - transaction flow tests covering auth, successful submission, idempotency, invalid amount, and currency mismatch
+- transaction posting updates account balances
+- successful transactions return `POSTED`
+- deposit and withdrawal ledger entries are created
+- insufficient funds returns `409`
+- idempotent retries must not update balances twice
 
-Planned scope includes double-entry ledger posting, balance mutation, optimistic concurrency, transactional outbox, Spring Kafka consumers, reconciliation, and dead-letter replay.
+Planned scope includes full double-entry ledger posting, failed transaction state handling, optimistic concurrency hardening, transactional outbox, Spring Kafka consumers, reconciliation, and dead-letter replay.
 
 ## Architecture Rules
 
@@ -116,6 +121,8 @@ V<number>__description.sql
 - Transactions are scoped to users with `transactions.owner_user_id`.
 - Transaction idempotency is scoped by `(owner_user_id, idempotency_key)`.
 - Ledger entries must be derived from accepted transaction commands and remain auditable.
+- Current ledger posting creates one account-facing ledger entry per transaction; full double-entry balancing is planned next.
+- Idempotent transaction retries must return the existing transaction without creating additional ledger entries or balance changes.
 
 ## Security Rules
 
@@ -150,8 +157,8 @@ docker compose config
 - Future integration tests should use Testcontainers for PostgreSQL and Kafka.
 - Auth tests should cover valid login, invalid login, token generation, and endpoint authorization.
 - Account tests should cover protected access, account creation, ownership from JWT subject, listing by current user, invalid request handling, and normalization.
-- Transaction tests should cover authentication, idempotency, ownership checks, validation, and currency mismatch.
-- Ledger posting tests should cover balanced entries, insufficient funds, currency mismatch, reversals, and concurrent transaction races.
+- Transaction tests should cover authentication, idempotency, ownership checks, validation, currency mismatch, balance updates, and insufficient funds.
+- Ledger posting tests should cover ledger entry creation, idempotent retry safety, full double-entry balancing, reversals, and concurrent transaction races.
 
 ## Local Development Commands
 
@@ -241,4 +248,4 @@ curl -X POST http://localhost:8080/transactions \
 - Do not make Kafka or caches the source of truth.
 - Do not make protected application endpoints public by default.
 - Do not store raw passwords, JWT secrets, or production credentials in source control.
-- Do not add ledger posting, outbox, Kafka consumers, or reconciliation code before the current milestone calls for it.
+- Do not add full double-entry balancing, outbox, Kafka consumers, or reconciliation code before the current milestone calls for it.

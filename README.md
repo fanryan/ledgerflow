@@ -95,7 +95,8 @@ flowchart LR
     Security -->|authenticated user id| Transactions
     Transactions -->|ownership check| AccountTable
     Transactions -->|POST /transactions| TransactionTable
-    Transactions -. planned posting .-> LedgerTable
+    Transactions -->|ledger entry| LedgerTable
+    Transactions -->|balance update| AccountTable
 ```
 
 Detailed implementation notes live in:
@@ -144,7 +145,7 @@ ledgerflow/
 
 ## Current Status
 
-Current stage: **Milestone 2 - Transaction Submission Foundation**
+Current stage: **Milestone 2 - Ledger-Backed Transaction Posting Foundation**
 
 Implemented:
 
@@ -180,13 +181,18 @@ Implemented:
 - Account ownership check before transaction creation
 - Transaction request validation with clean errors
 - Transaction flow tests for auth, successful submission, idempotency, invalid amount, and currency mismatch
+- Transaction posting updates account balances
+- Successful transactions return `POSTED`
+- Deposit and withdrawal ledger entries are created
+- Insufficient funds returns `409`
+- Idempotent retries do not update balances twice
 
 Next:
 
 - Double-entry ledger posting
-- Account balance updates
-- Insufficient funds handling
-- Transaction status transition from `PENDING` to `POSTED` or `FAILED`
+- Transaction status transition to `FAILED` for failed posting attempts
+- Reversal support
+- Concurrency tests for simultaneous withdrawals
 
 ## Local Development
 
@@ -294,15 +300,15 @@ gradle test
 
 ### Milestone 2
 
-- Transaction command submission
+- Ledger-backed transaction posting foundation
 - Idempotency foundation
-- Ledger table foundation
+- Balance updates
+- Insufficient funds handling
 
 ### Milestone 3
 
 - Double-entry ledger posting
 - Optimistic concurrency
-- Insufficient funds handling
 - Reversal support
 - Concurrent transaction tests
 

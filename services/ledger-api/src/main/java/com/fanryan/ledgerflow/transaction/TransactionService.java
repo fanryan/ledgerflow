@@ -1,5 +1,6 @@
 package com.fanryan.ledgerflow.transaction;
 
+import java.util.List;
 import java.time.OffsetDateTime;
 import java.util.Locale;
 import java.util.UUID;
@@ -46,6 +47,15 @@ public class TransactionService {
                         normalizedIdempotencyKey,
                         request
                 ));
+    }
+
+    @Transactional(readOnly = true)
+    public List<TransactionResponse> listTransactions(UUID ownerUserId) {
+        return transactionRepository
+                .findByOwnerUserIdOrderByCreatedAtDesc(ownerUserId)
+                .stream()
+                .map(TransactionResponse::from)
+                .toList();
     }
 
     private TransactionResponse createAndPostTransaction(

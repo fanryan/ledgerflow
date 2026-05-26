@@ -371,6 +371,46 @@ class TransactionFlowTest {
         assertThat(totalCredits).isEqualTo(400);
     }
 
+    @Test
+    void listTransactionsReturnsCurrentUsersTransactions() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+        String idempotencyKey = "tx-list-" + UUID.randomUUID();
+
+        String transactionResponse = submitDeposit(
+                accessToken,
+                accountId,
+                idempotencyKey
+        );
+
+        String transactionId = objectMapper
+                .readTree(transactionResponse)
+                .get("id")
+                .asText();
+
+        String listResponse = mockMvc.perform(get("/transactions")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        JsonNode transactions = objectMapper.readTree(listResponse);
+
+        assertThat(transactions).isNotEmpty();
+
+        boolean containsCreatedTransaction = false;
+
+        for (JsonNode transaction : transactions) {
+            if (transaction.get("id").asText().equals(transactionId)) {
+                containsCreatedTransaction = true;
+                break;
+            }
+        }
+
+        assertThat(containsCreatedTransaction).isTrue();
+    }
+
     private String submitWithdrawal(
             String accessToken,
             String accountId,

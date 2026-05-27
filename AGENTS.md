@@ -28,12 +28,14 @@ Current implemented Spring Boot slice:
 - `accounts` table
 - `POST /accounts`
 - `GET /accounts`
+- `GET /accounts/{accountId}/ledger-entries`
 - account ownership derived from the authenticated JWT subject
 - account request validation with clean `400` errors
-- account flow tests covering protected access, creation, listing, invalid currency, and currency normalization
+- account flow tests covering protected access, creation, listing, invalid currency, currency normalization, and account ledger entry listing
 - `transactions` table
 - `ledger_entries` table
 - `POST /transactions`
+- `GET /transactions`
 - idempotency lookup through `Idempotency-Key`
 - transaction ownership and currency validation
 - transaction flow tests covering auth, successful submission, idempotency, invalid amount, and currency mismatch
@@ -119,6 +121,7 @@ V<number>__description.sql
 - Account rows belong to users through `accounts.owner_user_id`.
 - Account balances are stored in minor units using `balance_minor`.
 - Account updates should preserve optimistic concurrency through the Spring Data `@Version` field.
+- Account ledger entry listing must verify account ownership before returning ledger rows.
 - Transactions are scoped to users with `transactions.owner_user_id`.
 - Transaction idempotency is scoped by `(owner_user_id, idempotency_key)`.
 - Ledger entries must be derived from accepted transaction commands and remain auditable.
@@ -158,7 +161,7 @@ docker compose config
 - Future integration tests should use Testcontainers for PostgreSQL and Kafka.
 - Auth tests should cover valid login, invalid login, token generation, and endpoint authorization.
 - Account tests should cover protected access, account creation, ownership from JWT subject, listing by current user, invalid request handling, and normalization.
-- Transaction tests should cover authentication, idempotency, ownership checks, validation, currency mismatch, balance updates, and insufficient funds.
+- Transaction tests should cover authentication, listing by current user, idempotency, ownership checks, validation, currency mismatch, balance updates, and insufficient funds.
 - Ledger posting tests should cover ledger entry creation, idempotent retry safety, balanced debits/credits, reversals, and concurrent transaction races.
 
 ## Local Development Commands
@@ -225,6 +228,13 @@ curl http://localhost:8080/accounts \
   -H "Authorization: Bearer <access_token>"
 ```
 
+List account ledger entries:
+
+```bash
+curl http://localhost:8080/accounts/<account_id>/ledger-entries \
+  -H "Authorization: Bearer <access_token>"
+```
+
 Submit a transaction:
 
 ```bash
@@ -239,6 +249,13 @@ curl -X POST http://localhost:8080/transactions \
     "currency": "USD",
     "description": "Example deposit"
   }'
+```
+
+List transactions:
+
+```bash
+curl http://localhost:8080/transactions \
+  -H "Authorization: Bearer <access_token>"
 ```
 
 ## What Not To Do

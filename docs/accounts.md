@@ -1,6 +1,6 @@
 # Accounts
 
-This document explains the current LedgerFlow account API implementation. It focuses on what exists today: creating accounts, listing the authenticated user's accounts, and persisting account rows in PostgreSQL.
+This document explains the current LedgerFlow account API implementation. It focuses on what exists today: creating accounts, listing the authenticated user's accounts, listing account ledger entries, and persisting account rows in PostgreSQL.
 
 ## 1. Current Account Scope
 
@@ -11,15 +11,17 @@ The Spring Boot API currently supports:
 - `accounts` table through Flyway migration `V3__create_accounts_table.sql`.
 - Authenticated `POST /accounts`.
 - Authenticated `GET /accounts`.
+- Authenticated `GET /accounts/{accountId}/ledger-entries`.
 - Account ownership from the JWT subject stored in Spring Security's `Authentication`.
 - Java account model mapped with Spring Data JDBC.
-- Spring Data repository for saving and listing accounts.
+- Spring Data repositories for saving/listing accounts and reading ledger entries.
 - New accounts start as `ACTIVE`.
 - New accounts start with `balanceMinor = 0`.
 - Account `version` is annotated with `@Version` for optimistic concurrency support.
 - Account request validation with clean `400` errors.
 - Currency normalization from lowercase or padded input to uppercase.
-- Account flow tests for authentication, creation, listing, invalid currency, and currency normalization.
+- Account ledger entry listing verifies account ownership before returning rows.
+- Account flow tests for authentication, creation, listing, invalid currency, currency normalization, and ledger entry listing.
 
 ### Not Implemented Yet
 
@@ -38,7 +40,7 @@ None of the account endpoints are public.
 
 ### Protected Endpoints
 
-Both account endpoints require:
+All account endpoints require:
 
 ```http
 Authorization: Bearer <access_token>
@@ -49,6 +51,7 @@ Current account endpoints:
 ```text
 POST /accounts
 GET  /accounts
+GET  /accounts/{accountId}/ledger-entries
 ```
 
 ## 2. Runtime Flow
@@ -247,7 +250,85 @@ PostgreSQL accounts table
 List<AccountResponse>
 ```
 
-## 5. Database Design
+## 5. List Account Ledger Entries Flow
+
+### Request
+
+`GET /accounts/{accountId}/ledger-entries`
+
+Required header:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+### Step-by-Step
+
+1. The request enters the Spring Security filter chain.
+2. `JwtAuthenticationFilter` validates the bearer token.
+3. The filter stores the user id as the authentication principal.
+4. `AccountController.listLedgerEntries(...)` reads the principal and path variable.
+5. The controller calls `AccountService.listLedgerEntries(ownerUserId, accountId)`.
+6. `AccountService` loads the account with `AccountRepository.findById(accountId)`.
+7. If the account does not exist, `AccountNotFoundException` becomes `404 ACCOUNT_NOT_FOUND`.
+8. If the account belongs to another user, `AccountOwnershipException` becomes `403 ACCOUNT_FORBIDDEN`.
+9. `LedgerEntryRepository.findByAccountIdOrderByCreatedAtDesc(accountId)` loads the account's ledger rows newest first.
+10. Each `LedgerEntry` is converted to `LedgerEntryResponse`.
+11. Spring returns `200 OK`.
+
+### Diagram
+
+```text
+Client
+  |
+  | GET /accounts/{accountId}/ledger-entries
+  | Authorization: Bearer <access_token>
+  v
+Spring Security
+  |
+  +--> JwtAuthenticationFilter validates token
+  +--> principal = user UUID
+  |
+  v
+AccountController
+  |
+  v
+AccountService
+  |
+  +--> AccountRepository.findById(accountId)
+  +--> verify account.ownerUserId == authenticated user id
+  |
+  v
+LedgerEntryRepository.findByAccountIdOrderByCreatedAtDesc(accountId)
+  |
+  v
+PostgreSQL ledger_entries table
+  |
+  v
+List<LedgerEntryResponse>
+```
+
+### Response
+
+Example after a deposit:
+
+```json
+[
+  {
+    "id": "1cda0a10-bef1-4891-8e3b-c9375ef82d31",
+    "transactionId": "caea1345-da6a-4a1a-9047-96345307e010",
+    "accountId": "5e824b14-77a3-4db7-882b-4c06abc2dc8b",
+    "direction": "CREDIT",
+    "amountMinor": 1000,
+    "currency": "USD",
+    "createdAt": "2026-05-27T12:00:00+08:00"
+  }
+]
+```
+
+The endpoint returns entries for the requested account only. The offset settlement account entry is stored in `ledger_entries`, but it is not returned when listing the user's account ledger entries.
+
+## 6. Database Design
 
 The account table is created by:
 
@@ -282,7 +363,7 @@ $10.50 -> 1050
 
 Money should not be represented with floating point numbers. Minor-unit integers avoid rounding errors.
 
-## 6. File-by-File Explanation
+## 7. File-by-File Explanation
 
 ### `AccountController.java`
 
@@ -296,8 +377,9 @@ Defines:
 
 - `POST /accounts`
 - `GET /accounts`
+- `GET /accounts/{accountId}/ledger-entries`
 
-It is a thin HTTP adapter. It reads the authenticated user id from `Authentication`, then delegates to `AccountService`.
+It is a thin HTTP adapter. It reads the authenticated user id from `Authentication`, reads path variables when needed, then delegates to `AccountService`.
 
 ### `AccountService.java`
 
@@ -309,6 +391,8 @@ Contains account business logic for the current slice:
 - create account defaults
 - save account
 - list accounts by owner
+- verify account ownership for ledger entry listing
+- list ledger entries by account
 - convert models to responses
 
 This is where future transaction boundaries should live.
@@ -324,6 +408,18 @@ Current examples:
 - currency that is not exactly three letters
 
 `GlobalExceptionHandler` maps this exception to `400 Bad Request`.
+
+### `AccountNotFoundException.java`
+
+Specific exception for account lookups where the submitted account id does not exist.
+
+`GlobalExceptionHandler` maps this exception to `404 ACCOUNT_NOT_FOUND`.
+
+### `AccountOwnershipException.java`
+
+Specific exception for account access where the account exists but belongs to another user.
+
+`GlobalExceptionHandler` maps this exception to `403 ACCOUNT_FORBIDDEN`.
 
 ### `AccountRepository.java`
 
@@ -396,6 +492,22 @@ Current fields:
 
 It has a static `from(Account account)` mapper to keep model-to-response conversion consistent.
 
+### `LedgerEntryResponse.java`
+
+Response DTO for account ledger entry listing.
+
+Current fields:
+
+- `id`
+- `transactionId`
+- `accountId`
+- `direction`
+- `amountMinor`
+- `currency`
+- `createdAt`
+
+It has a static `from(LedgerEntry ledgerEntry)` mapper to keep ledger model-to-response conversion consistent.
+
 ### `V3__create_accounts_table.sql`
 
 Flyway migration that creates the `accounts` table and index.
@@ -417,8 +529,10 @@ It covers:
 - valid JWT can list current user's accounts.
 - invalid currency returns `INVALID_ACCOUNT_REQUEST`.
 - lowercase currency is normalized before saving.
+- `GET /accounts/{accountId}/ledger-entries` requires authentication.
+- valid JWT can list ledger entries for an owned account after transaction posting.
 
-## 7. Key Spring Concepts
+## 8. Key Spring Concepts
 
 ### `@RestController`
 
@@ -468,7 +582,7 @@ Java's compact immutable data carrier.
 
 LedgerFlow uses records for database rows and request/response DTOs in this slice.
 
-## 8. Design Decisions
+## 9. Design Decisions
 
 ### Why Account Endpoints Require JWT
 
@@ -500,11 +614,35 @@ Examples:
 
 Unsupported currency allow-listing is still not implemented. Today, any three-letter alphabetic code is accepted.
 
+### Why Ledger Entry Listing Lives Under Accounts
+
+Ledger entries are the audit trail for balance movement on an account.
+
+The URL:
+
+```text
+GET /accounts/{accountId}/ledger-entries
+```
+
+starts from the account because ownership must be checked before ledger rows are returned.
+
+### Why Account Ownership Is Checked Before Ledger Entries
+
+Ledger entries reveal account movement. A caller must not be able to inspect another user's account history by guessing an account UUID.
+
+The service first verifies:
+
+```text
+account.ownerUserId == authenticated user id
+```
+
+Only then does it query `ledger_entries`.
+
 ### Why `@Version` Exists Already
 
 The project will need optimistic concurrency for account balance updates. The version field prepares the account model for safe updates later.
 
-## 9. Common Debugging Lessons
+## 10. Common Debugging Lessons
 
 ### `CrudRepository` Raw Type
 
@@ -575,10 +713,22 @@ returns:
 }
 ```
 
-## 10. Interview Questions and Answers
+### Ledger Entry Listing Returns 404 Or 403
+
+For:
+
+```text
+GET /accounts/{accountId}/ledger-entries
+```
+
+`404 ACCOUNT_NOT_FOUND` means the account id does not exist.
+
+`403 ACCOUNT_FORBIDDEN` means the account exists but does not belong to the authenticated user.
+
+## 11. Interview Questions and Answers
 
 1. **What does the account API currently do?**  
-   It lets an authenticated user create an account and list their own accounts.
+   It lets an authenticated user create an account, list their own accounts, and list ledger entries for an owned account.
 
 2. **How does the API know who owns the account?**  
    It reads the user UUID from `Authentication.getPrincipal()`, which was populated by the JWT filter.
@@ -637,7 +787,13 @@ returns:
 20. **How does this account slice prepare for transaction posting?**  
     It establishes user-owned accounts, balances in minor units, statuses, and optimistic concurrency versioning.
 
-## 11. Checklist Before Moving On
+21. **Why does ledger entry listing verify account ownership first?**  
+    Ledger entries expose account movement, so the service must prove the account belongs to the authenticated user before returning them.
+
+22. **Why use `LedgerEntryResponse` instead of returning `LedgerEntry` directly?**  
+    It keeps API response shape separate from persistence models and avoids leaking fields that are not part of the public contract.
+
+## 12. Checklist Before Moving On
 
 Before extending account behavior, be able to explain:
 
@@ -651,6 +807,8 @@ Before extending account behavior, be able to explain:
 - [ ] How `AccountRepository.findByOwnerUserId(...)` works.
 - [ ] Why `@Version` is on the `version` field.
 - [ ] What `AccountFlowTest` proves.
+- [ ] How account ledger entry listing verifies ownership.
+- [ ] Why `LedgerEntryResponse` exists.
 - [ ] How invalid account requests become clean `400` responses.
 - [ ] What is still missing before production-grade account APIs.
 - [ ] Why balance changes go through transactions instead of account creation.

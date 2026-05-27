@@ -13,6 +13,7 @@ The Spring Boot API currently supports:
 - `transactions` table through Flyway migration `V4__create_transactions_table.sql`.
 - `ledger_entries` table through Flyway migration `V5__create_ledger_entries_table.sql`.
 - Authenticated `POST /transactions`.
+- Authenticated `GET /transactions`.
 - `Idempotency-Key` request header.
 - Idempotency lookup scoped by `(owner_user_id, idempotency_key)`.
 - Account existence check before transaction creation.
@@ -28,7 +29,7 @@ The Spring Boot API currently supports:
 - USD settlement system account seeded by `V6__seed_system_account.sql`.
 - `SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID` centralizes the settlement account UUID in Java.
 - Java models and repositories for `Transaction` and `LedgerEntry`.
-- Transaction flow tests for auth, successful submission, idempotency, invalid amount, currency mismatch, balance updates, insufficient funds, idempotent retry balance safety, and balanced ledger entries.
+- Transaction flow tests for auth, listing, successful submission, idempotency, invalid amount, currency mismatch, balance updates, insufficient funds, idempotent retry balance safety, and balanced ledger entries.
 
 ### Not Implemented Yet
 
@@ -82,7 +83,35 @@ Current successful response:
 
 The transaction is returned as `POSTED` after the balanced ledger entries are written and the account balance is updated.
 
-## 3. Runtime Flow
+### `GET /transactions`
+
+Required header:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+Current successful response:
+
+```json
+[
+  {
+    "id": "caea1345-da6a-4a1a-9047-96345307e010",
+    "accountId": "5e824b14-77a3-4db7-882b-4c06abc2dc8b",
+    "ownerUserId": "00000000-0000-0000-0000-000000000001",
+    "idempotencyKey": "tx-example-001",
+    "type": "DEPOSIT",
+    "amountMinor": 1000,
+    "currency": "USD",
+    "status": "POSTED",
+    "description": "Test deposit"
+  }
+]
+```
+
+The endpoint lists transactions for the authenticated user only, newest first.
+
+## 3. Submit Transaction Runtime Flow
 
 ```text
 Client
@@ -126,7 +155,36 @@ TransactionService
 PostgreSQL transactions, ledger_entries, and accounts tables
 ```
 
-## 4. Idempotency Flow
+## 4. List Transactions Runtime Flow
+
+```text
+Client
+  |
+  | GET /transactions
+  | Authorization: Bearer <access_token>
+  v
+Spring Security
+  |
+  +--> JwtAuthenticationFilter validates token
+  +--> principal = user UUID from JWT sub claim
+  |
+  v
+TransactionController
+  |
+  +--> ownerUserId = authentication.getPrincipal()
+  |
+  v
+TransactionService
+  |
+  +--> find transactions for current owner
+  +--> sort newest first through repository method name
+  +--> convert Transaction rows to TransactionResponse
+  |
+  v
+PostgreSQL transactions table
+```
+
+## 5. Idempotency Flow
 
 The current idempotency rule is:
 
@@ -167,7 +225,7 @@ Second request with same owner/key
 
 Current note: the controller still returns `201 Created` for both first and repeated idempotent submissions because it is annotated with `@ResponseStatus(HttpStatus.CREATED)`. The important behavior today is duplicate prevention, same-result return, and no duplicate balance movement.
 
-## 5. Database Design
+## 6. Database Design
 
 ### `transactions`
 
@@ -249,7 +307,7 @@ Current constant:
 SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID
 ```
 
-## 6. File-by-File Explanation
+## 7. File-by-File Explanation
 
 ### `TransactionController.java`
 
@@ -257,15 +315,18 @@ Defines:
 
 ```text
 POST /transactions
+GET  /transactions
 ```
 
-It reads:
+For submission, it reads:
 
 - authenticated user id from `Authentication`
 - idempotency key from the `Idempotency-Key` header
 - transaction fields from `CreateTransactionRequest`
 
-Then it delegates to `TransactionService`.
+For listing, it reads the authenticated user id from `Authentication`.
+
+Both methods delegate to `TransactionService`.
 
 ### `TransactionService.java`
 
@@ -273,6 +334,7 @@ Contains transaction command business logic:
 
 - normalize and validate idempotency key
 - return existing transaction for repeated owner/key pair
+- list transactions by authenticated owner
 - validate request body
 - load account
 - enforce account ownership
@@ -381,6 +443,12 @@ Mapped to:
 
 ### `AccountNotFoundException.java`
 
+Path:
+
+```text
+services/ledger-api/src/main/java/com/fanryan/ledgerflow/account/AccountNotFoundException.java
+```
+
 Thrown when the submitted account id does not exist.
 
 Mapped to:
@@ -390,6 +458,12 @@ Mapped to:
 ```
 
 ### `AccountOwnershipException.java`
+
+Path:
+
+```text
+services/ledger-api/src/main/java/com/fanryan/ledgerflow/account/AccountOwnershipException.java
+```
 
 Thrown when the target account exists but does not belong to the authenticated user.
 
@@ -407,7 +481,7 @@ Spring Data JDBC model for the `ledger_entries` table.
 
 ### `LedgerEntryRepository.java`
 
-Repository for future ledger entry lookups.
+Repository for ledger entry lookups.
 
 Important derived queries:
 
@@ -433,7 +507,7 @@ USD_SETTLEMENT_ACCOUNT_ID
 
 This points to the seeded USD settlement account used for offset entries.
 
-## 7. Design Decisions
+## 8. Design Decisions
 
 ### Why Idempotency Uses a Header
 
@@ -448,6 +522,20 @@ The unique constraint is:
 ```text
 owner_user_id + idempotency_key
 ```
+
+### Why Transaction Listing Is Scoped By Owner
+
+`GET /transactions` uses the authenticated user id from the JWT, not a user id from the request.
+
+This keeps users from listing another user's transaction history.
+
+The repository method is:
+
+```java
+findByOwnerUserIdOrderByCreatedAtDesc(ownerUserId)
+```
+
+The method name expresses both the ownership filter and newest-first ordering.
 
 ### Why Account Ownership Is Checked In The Service
 
@@ -500,7 +588,7 @@ Richer system-account modeling is still future work.
 
 Those directions describe the user account entry. The settlement account receives the opposite direction.
 
-## 8. Common Debugging Lessons
+## 9. Common Debugging Lessons
 
 ### Reused Idempotency Keys Return Old Results
 
@@ -528,7 +616,7 @@ If an endpoint throws unexpectedly and the app forwards to `/error`, Spring Secu
 
 When this happens, check the application logs or test report for the underlying exception.
 
-## 9. Interview Questions and Answers
+## 10. Interview Questions and Answers
 
 1. **What does the transaction endpoint currently do?**  
    It accepts an authenticated transaction command, creates balanced ledger entries, updates the account balance, and returns a `POSTED` transaction.
@@ -584,11 +672,18 @@ When this happens, check the application logs or test report for the underlying 
 18. **What does the balanced ledger test prove?**  
     For a transaction, total debits equal total credits.
 
-## 10. Checklist Before Moving On
+19. **What does `GET /transactions` return?**  
+    It returns the authenticated user's transactions, newest first.
+
+20. **Why does `GET /transactions` not accept a user id parameter?**  
+    The user id comes from the validated JWT so callers cannot request another user's transaction history.
+
+## 11. Checklist Before Moving On
 
 Before moving on to reversals or outbox, be able to explain:
 
 - [ ] Why `POST /transactions` requires authentication.
+- [ ] Why `GET /transactions` is scoped to the authenticated user.
 - [ ] Why idempotency key lives in a header.
 - [ ] How repeated idempotency keys return the same transaction.
 - [ ] Why account ownership is checked after loading the account.

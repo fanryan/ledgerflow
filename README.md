@@ -91,10 +91,12 @@ flowchart LR
     Security -->|authenticated user id| Accounts
     Accounts -->|POST /accounts| AccountTable
     Accounts -->|GET /accounts| AccountTable
+    Accounts -->|GET /accounts/:id/ledger-entries| LedgerTable
 
     Security -->|authenticated user id| Transactions
     Transactions -->|ownership check| AccountTable
     Transactions -->|POST /transactions| TransactionTable
+    Transactions -->|GET /transactions| TransactionTable
     Transactions -->|balanced ledger entries| LedgerTable
     Transactions -->|balance update| AccountTable
 ```
@@ -171,12 +173,14 @@ Implemented:
 - `accounts` table migration
 - `POST /accounts` authenticated account creation endpoint
 - `GET /accounts` authenticated account listing endpoint
+- `GET /accounts/{accountId}/ledger-entries` authenticated account ledger listing endpoint
 - Account ownership derived from JWT subject, not request body
 - Account request validation with clean `400` errors
-- Account flow tests for protected access, creation, listing, invalid currency, and currency normalization
+- Account flow tests for protected access, creation, listing, invalid currency, currency normalization, and ledger entry listing
 - `transactions` table migration
 - `ledger_entries` table migration
 - `POST /transactions` authenticated transaction submission endpoint
+- `GET /transactions` authenticated transaction listing endpoint
 - Idempotency lookup through `Idempotency-Key`
 - Account ownership check before transaction creation
 - Transaction request validation with clean errors
@@ -266,6 +270,13 @@ curl http://localhost:8080/accounts \
   -H "Authorization: Bearer <access_token>"
 ```
 
+List account ledger entries:
+
+```bash
+curl http://localhost:8080/accounts/<account_id>/ledger-entries \
+  -H "Authorization: Bearer <access_token>"
+```
+
 Submit a transaction:
 
 ```bash
@@ -280,6 +291,13 @@ curl -X POST http://localhost:8080/transactions \
     "currency": "USD",
     "description": "Example deposit"
   }'
+```
+
+List transactions:
+
+```bash
+curl http://localhost:8080/transactions \
+  -H "Authorization: Bearer <access_token>"
 ```
 
 Run tests:

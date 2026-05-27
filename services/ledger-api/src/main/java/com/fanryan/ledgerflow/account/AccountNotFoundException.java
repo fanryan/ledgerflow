@@ -1,4 +1,4 @@
-package com.fanryan.ledgerflow.transaction;
+package com.fanryan.ledgerflow.account;
 
 public class AccountNotFoundException extends RuntimeException {
 

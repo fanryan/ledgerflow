@@ -1,5 +1,7 @@
 package com.fanryan.ledgerflow.account;
 
+import java.util.UUID;
+
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -132,5 +134,70 @@ class AccountFlowTest {
                                 """))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.currency").value("SGD"));
+    }
+
+    @Test
+    void listLedgerEntriesRequiresAuthentication() throws Exception {
+        mockMvc.perform(get("/accounts/00000000-0000-0000-0000-000000000001/ledger-entries"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void listLedgerEntriesReturnsEntriesForAccount() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+        String idempotencyKey = "ledger-list-" + UUID.randomUUID();
+
+        submitDeposit(accessToken, accountId, idempotencyKey);
+
+        mockMvc.perform(get("/accounts/{accountId}/ledger-entries", accountId)
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$[0].accountId").value(accountId))
+                .andExpect(jsonPath("$[0].transactionId").isNotEmpty())
+                .andExpect(jsonPath("$[0].direction").value("CREDIT"))
+                .andExpect(jsonPath("$[0].amountMinor").value(1000))
+                .andExpect(jsonPath("$[0].currency").value("USD"));
+    }
+
+    private String createAccountAndGetId(String accessToken, String currency) throws Exception {
+        String accountResponse = mockMvc.perform(post("/accounts")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .content("""
+                                {
+                                  "currency": "%s"
+                                }
+                                """.formatted(currency)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        JsonNode accountJson = objectMapper.readTree(accountResponse);
+
+        return accountJson.get("id").asText();
+    }
+
+    private void submitDeposit(
+            String accessToken,
+            String accountId,
+            String idempotencyKey
+    ) throws Exception {
+        mockMvc.perform(post("/transactions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .header("Idempotency-Key", idempotencyKey)
+                        .content("""
+                                {
+                                  "accountId": "%s",
+                                  "type": "DEPOSIT",
+                                  "amountMinor": 1000,
+                                  "currency": "USD",
+                                  "description": "Ledger entry test deposit"
+                                }
+                                """.formatted(accountId)))
+                .andExpect(status().isCreated());
     }
 }

@@ -29,7 +29,7 @@ class AccountFlowTest {
     @Test
     void createAccountRequiresAuthentication() throws Exception {
         mockMvc.perform(post("/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("""
                                 {
                                   "currency": "USD"
@@ -43,7 +43,7 @@ class AccountFlowTest {
         String accessToken = loginAndGetAccessToken();
 
         mockMvc.perform(post("/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .header("Authorization", "Bearer " + accessToken)
                         .content("""
                                 {
@@ -69,7 +69,7 @@ class AccountFlowTest {
         String accessToken = loginAndGetAccessToken();
 
         mockMvc.perform(post("/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .header("Authorization", "Bearer " + accessToken)
                         .content("""
                                 {
@@ -86,7 +86,7 @@ class AccountFlowTest {
 
     private String loginAndGetAccessToken() throws Exception {
         String loginResponse = mockMvc.perform(post("/auth/login")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("""
                                 {
                                   "email": "admin@ledgerflow.local",
@@ -108,7 +108,7 @@ class AccountFlowTest {
         String accessToken = loginAndGetAccessToken();
 
         mockMvc.perform(post("/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .header("Authorization", "Bearer " + accessToken)
                         .content("""
                                 {
@@ -125,7 +125,7 @@ class AccountFlowTest {
         String accessToken = loginAndGetAccessToken();
 
         mockMvc.perform(post("/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .header("Authorization", "Bearer " + accessToken)
                         .content("""
                                 {
@@ -163,7 +163,7 @@ class AccountFlowTest {
 
     private String createAccountAndGetId(String accessToken, String currency) throws Exception {
         String accountResponse = mockMvc.perform(post("/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .header("Authorization", "Bearer " + accessToken)
                         .content("""
                                 {
@@ -186,7 +186,7 @@ class AccountFlowTest {
             String idempotencyKey
     ) throws Exception {
         mockMvc.perform(post("/transactions")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .header("Authorization", "Bearer " + accessToken)
                         .header("Idempotency-Key", idempotencyKey)
                         .content("""

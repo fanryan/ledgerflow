@@ -33,7 +33,7 @@ public class TransactionService {
         this.ledgerEntryRepository = ledgerEntryRepository;
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = InsufficientFundsException.class)
     public TransactionResponse submitTransaction(
             UUID ownerUserId,
             String idempotencyKey,
@@ -99,11 +99,32 @@ public class TransactionService {
 
         Transaction savedPendingTransaction = transactionRepository.save(pendingTransaction);
 
-        long newBalanceMinor = calculateNewBalance(
+        Long newBalanceMinor = calculateNewBalanceOrNull(
                 account.balanceMinor(),
                 request.type(),
                 request.amountMinor()
         );
+
+        if (newBalanceMinor == null) {
+            Transaction failedTransaction = new Transaction(
+                    savedPendingTransaction.id(),
+                    savedPendingTransaction.accountId(),
+                    savedPendingTransaction.ownerUserId(),
+                    savedPendingTransaction.idempotencyKey(),
+                    savedPendingTransaction.type(),
+                    savedPendingTransaction.amountMinor(),
+                    savedPendingTransaction.currency(),
+                    TransactionStatus.FAILED,
+                    savedPendingTransaction.description(),
+                    savedPendingTransaction.version(),
+                    savedPendingTransaction.createdAt(),
+                    now
+            );
+
+            transactionRepository.save(failedTransaction);
+
+            throw new InsufficientFundsException();
+        }
 
         LedgerEntry userLedgerEntry = new LedgerEntry(
                 UUID.randomUUID(),
@@ -153,7 +174,7 @@ public class TransactionService {
         return TransactionResponse.from(savedPostedTransaction);
     }
 
-    private long calculateNewBalance(
+    private Long calculateNewBalanceOrNull(
             long currentBalanceMinor,
             TransactionType type,
             long amountMinor
@@ -162,7 +183,7 @@ public class TransactionService {
             case DEPOSIT -> currentBalanceMinor + amountMinor;
             case WITHDRAWAL -> {
                 if (currentBalanceMinor < amountMinor) {
-                    throw new InsufficientFundsException();
+                    yield null;
                 }
 
                 yield currentBalanceMinor - amountMinor;

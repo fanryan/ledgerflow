@@ -38,7 +38,7 @@ class TransactionFlowTest {
     @Test
     void submitTransactionRequiresAuthentication() throws Exception {
         mockMvc.perform(post("/transactions")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .header("Idempotency-Key", "tx-no-auth")
                         .content("""
                                 {
@@ -59,7 +59,7 @@ class TransactionFlowTest {
         String idempotencyKey = "tx-create-pending-" + UUID.randomUUID();
 
         mockMvc.perform(post("/transactions")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .header("Authorization", "Bearer " + accessToken)
                         .header("Idempotency-Key", idempotencyKey)
                         .content("""
@@ -112,7 +112,7 @@ class TransactionFlowTest {
         String accountId = createAccountAndGetId(accessToken, "USD");
 
         mockMvc.perform(post("/transactions")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .header("Authorization", "Bearer " + accessToken)
                         .header("Idempotency-Key", "tx-invalid-amount")
                         .content("""
@@ -135,7 +135,7 @@ class TransactionFlowTest {
         String accountId = createAccountAndGetId(accessToken, "USD");
 
         mockMvc.perform(post("/transactions")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .header("Authorization", "Bearer " + accessToken)
                         .header("Idempotency-Key", "tx-currency-mismatch")
                         .content("""
@@ -158,7 +158,7 @@ class TransactionFlowTest {
             String idempotencyKey
     ) throws Exception {
         return mockMvc.perform(post("/transactions")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .header("Authorization", "Bearer " + accessToken)
                         .header("Idempotency-Key", idempotencyKey)
                         .content("""
@@ -178,7 +178,7 @@ class TransactionFlowTest {
 
     private String createAccountAndGetId(String accessToken, String currency) throws Exception {
         String accountResponse = mockMvc.perform(post("/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .header("Authorization", "Bearer " + accessToken)
                         .content("""
                                 {
@@ -197,7 +197,7 @@ class TransactionFlowTest {
 
     private String loginAndGetAccessToken() throws Exception {
         String loginResponse = mockMvc.perform(post("/auth/login")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("""
                                 {
                                   "email": "admin@ledgerflow.local",
@@ -261,7 +261,7 @@ class TransactionFlowTest {
         String accountId = createAccountAndGetId(accessToken, "USD");
 
         mockMvc.perform(post("/transactions")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .header("Authorization", "Bearer " + accessToken)
                         .header("Idempotency-Key", "tx-insufficient-" + UUID.randomUUID())
                         .content("""
@@ -276,6 +276,37 @@ class TransactionFlowTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.errorCode").value("INSUFFICIENT_FUNDS"))
                 .andExpect(jsonPath("$.message").value("Insufficient funds"));
+    }
+
+    @Test
+    void insufficientFundsCreatesFailedTransaction() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+        String idempotencyKey = "tx-insufficient-failed-" + UUID.randomUUID();
+
+        mockMvc.perform(post("/transactions")
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .header("Idempotency-Key", idempotencyKey)
+                        .content("""
+                                {
+                                  "accountId": "%s",
+                                  "type": "WITHDRAWAL",
+                                  "amountMinor": 1000,
+                                  "currency": "USD",
+                                  "description": "Too much"
+                                }
+                                """.formatted(accountId)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("INSUFFICIENT_FUNDS"))
+                .andExpect(jsonPath("$.message").value("Insufficient funds"));
+
+        mockMvc.perform(get("/transactions")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.idempotencyKey == '%s')].status".formatted(idempotencyKey)).value("FAILED"))
+                .andExpect(jsonPath("$[?(@.idempotencyKey == '%s')].type".formatted(idempotencyKey)).value("WITHDRAWAL"))
+                .andExpect(jsonPath("$[?(@.idempotencyKey == '%s')].amountMinor".formatted(idempotencyKey)).value(1000));
     }
 
     @Test
@@ -418,7 +449,7 @@ class TransactionFlowTest {
             long amountMinor
     ) throws Exception {
         return mockMvc.perform(post("/transactions")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .header("Authorization", "Bearer " + accessToken)
                         .header("Idempotency-Key", idempotencyKey)
                         .content("""

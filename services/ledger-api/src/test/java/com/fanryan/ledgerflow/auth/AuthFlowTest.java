@@ -28,7 +28,7 @@ class AuthFlowTest {
     @Test
     void loginReturnsAccessAndRefreshTokens() throws Exception {
         mockMvc.perform(post("/auth/login")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("""
                                 {
                                   "email": "admin@ledgerflow.local",
@@ -43,7 +43,7 @@ class AuthFlowTest {
     @Test
     void loginWithWrongPasswordReturnsInvalidCredentials() throws Exception {
         mockMvc.perform(post("/auth/login")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("""
                                 {
                                   "email": "admin@ledgerflow.local",
@@ -58,7 +58,7 @@ class AuthFlowTest {
     @Test
     void refreshWithValidRefreshTokenReturnsNewTokens() throws Exception {
         String loginResponse = mockMvc.perform(post("/auth/login")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("""
                                 {
                                   "email": "admin@ledgerflow.local",
@@ -74,7 +74,7 @@ class AuthFlowTest {
         String refreshToken = loginJson.get("refreshToken").asText();
 
         mockMvc.perform(post("/auth/refresh")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("""
                                 {
                                   "refreshToken": "%s"
@@ -88,7 +88,7 @@ class AuthFlowTest {
     @Test
     void refreshWithBadTokenReturnsInvalidToken() throws Exception {
         mockMvc.perform(post("/auth/refresh")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("""
                                 {
                                   "refreshToken": "bad-token"
@@ -107,7 +107,7 @@ class AuthFlowTest {
     @Test
     void authMeReturnsCurrentUserWhenTokenIsValid() throws Exception {
         String loginResponse = mockMvc.perform(post("/auth/login")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("""
                                 {
                                   "email": "admin@ledgerflow.local",

@@ -44,9 +44,10 @@ Current implemented Spring Boot slice:
 - deposit and withdrawal create balanced ledger entries
 - USD settlement system account is seeded for offset entries
 - insufficient funds returns `409`
+- insufficient funds records a `FAILED` transaction row
 - idempotent retries must not update balances twice
 
-Planned scope includes failed transaction state handling, richer system-account modeling, optimistic concurrency hardening, transactional outbox, Spring Kafka consumers, reconciliation, and dead-letter replay.
+Planned scope includes richer system-account modeling, optimistic concurrency hardening, transactional outbox, Spring Kafka consumers, reconciliation, and dead-letter replay.
 
 ## Architecture Rules
 
@@ -124,6 +125,7 @@ V<number>__description.sql
 - Account ledger entry listing must verify account ownership before returning ledger rows.
 - Transactions are scoped to users with `transactions.owner_user_id`.
 - Transaction idempotency is scoped by `(owner_user_id, idempotency_key)`.
+- Failed transaction rows should remain queryable when a business-rule failure has already been accepted as a transaction command.
 - Ledger entries must be derived from accepted transaction commands and remain auditable.
 - Current ledger posting creates balanced entries between the user account and the seeded USD settlement system account.
 - Idempotent transaction retries must return the existing transaction without creating additional ledger entries or balance changes.

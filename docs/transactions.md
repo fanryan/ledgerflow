@@ -1,6 +1,6 @@
 # Transactions
 
-This document explains the current LedgerFlow transaction posting foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, and returning `POSTED` transaction rows.
+This document explains the current LedgerFlow transaction posting foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, and recording `FAILED` rows for insufficient funds.
 
 The current implementation creates two balanced ledger entries per posted transaction: one for the user account and one for the seeded USD settlement system account.
 
@@ -25,17 +25,17 @@ The Spring Boot API currently supports:
 - Deposits increase account balance.
 - Withdrawals decrease account balance.
 - Insufficient withdrawals return `409 INSUFFICIENT_FUNDS`.
+- Insufficient withdrawals are recorded as `FAILED` transactions.
 - Balanced ledger entries are written for deposits and withdrawals.
 - USD settlement system account seeded by `V6__seed_system_account.sql`.
 - `SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID` centralizes the settlement account UUID in Java.
 - Java models and repositories for `Transaction` and `LedgerEntry`.
-- Transaction flow tests for auth, listing, successful submission, idempotency, invalid amount, currency mismatch, balance updates, insufficient funds, idempotent retry balance safety, and balanced ledger entries.
+- Transaction flow tests for auth, listing, successful submission, idempotency, invalid amount, currency mismatch, balance updates, insufficient funds, failed transaction recording, idempotent retry balance safety, and balanced ledger entries.
 
 ### Not Implemented Yet
 
 These are planned, not implemented:
 
-- Marking transactions `FAILED` after business-rule failures.
 - Richer system-account modeling beyond the seeded USD settlement account.
 - Transaction reversal.
 - Outbox events for posted transactions.
@@ -225,7 +225,33 @@ Second request with same owner/key
 
 Current note: the controller still returns `201 Created` for both first and repeated idempotent submissions because it is annotated with `@ResponseStatus(HttpStatus.CREATED)`. The important behavior today is duplicate prevention, same-result return, and no duplicate balance movement.
 
-## 6. Database Design
+## 6. Failed Transaction Flow
+
+Insufficient funds is a business-rule failure that happens after the command is accepted and the target account is loaded.
+
+Current behavior:
+
+```text
+POST /transactions WITHDRAWAL
+  |
+  +--> save PENDING transaction
+  +--> calculate new balance
+  +--> insufficient funds
+  +--> update transaction to FAILED
+  +--> return 409 INSUFFICIENT_FUNDS
+```
+
+The service uses:
+
+```java
+@Transactional(noRollbackFor = InsufficientFundsException.class)
+```
+
+That matters because `InsufficientFundsException` is a runtime exception. By default, Spring rolls back transactions for runtime exceptions. `noRollbackFor` lets LedgerFlow keep the `FAILED` transaction row while still returning a `409` response.
+
+No ledger entries are created for the failed withdrawal, and the account balance is not changed.
+
+## 7. Database Design
 
 ### `transactions`
 
@@ -307,7 +333,7 @@ Current constant:
 SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID
 ```
 
-## 7. File-by-File Explanation
+## 8. File-by-File Explanation
 
 ### `TransactionController.java`
 
@@ -341,12 +367,15 @@ Contains transaction command business logic:
 - enforce currency match
 - save `PENDING` transaction
 - calculate the new account balance
+- update transaction to `FAILED` when insufficient funds occurs
 - create user ledger entry
 - create settlement ledger entry
 - save the updated account
 - update the transaction to `POSTED`
 
-It is wrapped in `@Transactional` so transaction creation, ledger entry creation, account balance update, and status update succeed or fail together.
+It is wrapped in `@Transactional(noRollbackFor = InsufficientFundsException.class)`.
+
+Successful posting commits transaction creation, ledger entry creation, account balance update, and status update together. Insufficient funds still throws an API error, but the `FAILED` transaction row is committed.
 
 ### `TransactionRepository.java`
 
@@ -420,6 +449,8 @@ Enum:
 - `FAILED`
 
 Successful submissions currently return `POSTED`. The service still creates a `PENDING` transaction first, then updates it to `POSTED` inside the same database transaction.
+
+Insufficient withdrawals are saved as `FAILED` and returned through `GET /transactions`.
 
 ### `InvalidTransactionRequestException.java`
 
@@ -507,7 +538,7 @@ USD_SETTLEMENT_ACCOUNT_ID
 
 This points to the seeded USD settlement account used for offset entries.
 
-## 8. Design Decisions
+## 9. Design Decisions
 
 ### Why Idempotency Uses a Header
 
@@ -555,6 +586,40 @@ The service first records the accepted command as `PENDING`, then creates the ba
 
 Because the method is `@Transactional`, these steps are committed together.
 
+### Why Insufficient Funds Records `FAILED`
+
+An insufficient withdrawal is still a transaction command the API accepted and evaluated.
+
+Recording it as `FAILED` gives LedgerFlow an audit trail:
+
+```text
+user tried withdrawal -> system rejected it -> reason was insufficient funds
+```
+
+The current API response remains:
+
+```text
+409 INSUFFICIENT_FUNDS
+```
+
+The failed row is visible later through:
+
+```text
+GET /transactions
+```
+
+### Why `noRollbackFor` Is Used
+
+Spring normally rolls back a transaction when a `RuntimeException` is thrown.
+
+`InsufficientFundsException` extends `RuntimeException`, but LedgerFlow wants the `FAILED` transaction row to commit. That is why `submitTransaction(...)` uses:
+
+```java
+@Transactional(noRollbackFor = InsufficientFundsException.class)
+```
+
+This keeps the audit row while still letting the controller return an error response.
+
 ### Why A Settlement Account Exists
 
 Double-entry needs both sides of a movement. LedgerFlow uses a seeded USD settlement system account as the offset side for the current implementation.
@@ -588,7 +653,7 @@ Richer system-account modeling is still future work.
 
 Those directions describe the user account entry. The settlement account receives the opposite direction.
 
-## 9. Common Debugging Lessons
+## 10. Common Debugging Lessons
 
 ### Reused Idempotency Keys Return Old Results
 
@@ -616,7 +681,17 @@ If an endpoint throws unexpectedly and the app forwards to `/error`, Spring Secu
 
 When this happens, check the application logs or test report for the underlying exception.
 
-## 10. Interview Questions and Answers
+### `FAILED` Row Disappears After Throwing
+
+If a service saves a `FAILED` row and then throws a runtime exception, Spring may roll back the save.
+
+For insufficient funds, LedgerFlow avoids that with:
+
+```java
+@Transactional(noRollbackFor = InsufficientFundsException.class)
+```
+
+## 11. Interview Questions and Answers
 
 1. **What does the transaction endpoint currently do?**  
    It accepts an authenticated transaction command, creates balanced ledger entries, updates the account balance, and returns a `POSTED` transaction.
@@ -657,14 +732,14 @@ When this happens, check the application logs or test report for the underlying 
 13. **What makes a transaction `POSTED` today?**  
     Successful ledger entry creation and account balance update.
 
-14. **What will make a transaction `FAILED` later?**  
-    Business-rule failure such as insufficient funds or invalid posting state.
+14. **What makes a transaction `FAILED` today?**  
+    An insufficient-funds withdrawal creates a `FAILED` transaction row and returns `409 INSUFFICIENT_FUNDS`.
 
 15. **Why separate `transactions` from `ledger_entries`?**  
     Transactions are user commands; ledger entries are accounting facts.
 
 16. **What happens on insufficient funds?**  
-    The service throws `InsufficientFundsException`, and the API returns `409 INSUFFICIENT_FUNDS`.
+    The service saves the transaction as `FAILED`, throws `InsufficientFundsException`, and the API returns `409 INSUFFICIENT_FUNDS`.
 
 17. **How does double-entry work here today?**  
     Deposits credit the user account and debit the USD settlement account. Withdrawals debit the user account and credit the USD settlement account.
@@ -678,7 +753,10 @@ When this happens, check the application logs or test report for the underlying 
 20. **Why does `GET /transactions` not accept a user id parameter?**  
     The user id comes from the validated JWT so callers cannot request another user's transaction history.
 
-## 11. Checklist Before Moving On
+21. **Why does `submitTransaction` use `noRollbackFor`?**  
+    Without it, Spring would roll back the saved `FAILED` row when `InsufficientFundsException` is thrown.
+
+## 12. Checklist Before Moving On
 
 Before moving on to reversals or outbox, be able to explain:
 
@@ -689,6 +767,8 @@ Before moving on to reversals or outbox, be able to explain:
 - [ ] Why account ownership is checked after loading the account.
 - [ ] Why transaction currency must match account currency.
 - [ ] Why transactions are saved as `PENDING` first and then updated to `POSTED`.
+- [ ] Why insufficient funds saves a `FAILED` transaction row.
+- [ ] Why `noRollbackFor = InsufficientFundsException.class` is needed.
 - [ ] What the `transactions` table stores.
 - [ ] What the `ledger_entries` table stores.
 - [ ] Why the USD settlement system account exists.

@@ -190,11 +190,11 @@ Implemented:
 - Deposit and withdrawal create balanced ledger entries
 - USD settlement system account is seeded for offset entries
 - Insufficient funds returns `409`
+- Insufficient funds records a `FAILED` transaction row
 - Idempotent retries do not update balances twice
 
 Next:
 
-- Transaction status transition to `FAILED` for failed posting attempts
 - Reversal support
 - Concurrency tests for simultaneous withdrawals
 

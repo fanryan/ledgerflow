@@ -20,6 +20,6 @@ logging:
 
 ledgerflow:
   jwt:
-    secret: "local-development-secret-key-change-later-please-make-this-long"
+    secret: ${LEDGERFLOW_JWT_SECRET:local-development-secret-key-change-later-please-make-this-long}
     access-token-ttl-minutes: 60
     refresh-token-ttl-days: 7

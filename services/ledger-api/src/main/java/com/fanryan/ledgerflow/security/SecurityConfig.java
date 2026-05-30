@@ -1,9 +1,14 @@
 package com.fanryan.ledgerflow.security;
 
+import java.time.OffsetDateTime;
+import java.util.UUID;
+
 import com.fanryan.ledgerflow.auth.JwtService;
+import jakarta.servlet.http.HttpServletResponse;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -23,6 +28,18 @@ public class SecurityConfig {
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                )
+                .exceptionHandling(exception -> exception
+                        .authenticationEntryPoint((request, response, authException) -> {
+                            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                            response.getWriter().write("""
+                                    {"error_code":"UNAUTHORIZED","message":"Missing or invalid JWT","request_id":"%s","timestamp":"%s"}
+                                    """.formatted(
+                                    UUID.randomUUID(),
+                                    OffsetDateTime.now()
+                            ));
+                        })
                 )
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/health", "/auth/login", "/auth/refresh").permitAll()

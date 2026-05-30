@@ -49,7 +49,7 @@ class TransactionFlowTest {
                                   "description": "No auth"
                                 }
                                 """))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -107,6 +107,41 @@ class TransactionFlowTest {
     }
 
     @Test
+    void repeatedIdempotencyKeyWithDifferentPayloadReturnsConflict() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+        String idempotencyKey = "tx-idempotent-conflict-" + UUID.randomUUID();
+
+        submitDeposit(
+                accessToken,
+                accountId,
+                idempotencyKey
+        );
+
+        mockMvc.perform(post("/transactions")
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .header("Idempotency-Key", idempotencyKey)
+                        .content("""
+                                {
+                                  "accountId": "%s",
+                                  "type": "DEPOSIT",
+                                  "amountMinor": 2000,
+                                  "currency": "USD",
+                                  "description": "Different deposit"
+                                }
+                                """.formatted(accountId)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error_code").value("IDEMPOTENCY_CONFLICT"))
+                .andExpect(jsonPath("$.message").value("Idempotency key was already used with a different request payload"));
+
+        mockMvc.perform(get("/accounts")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == '%s')].balanceMinor".formatted(accountId)).value(1000));
+    }
+
+    @Test
     void invalidAmountReturnsBadRequest() throws Exception {
         String accessToken = loginAndGetAccessToken();
         String accountId = createAccountAndGetId(accessToken, "USD");
@@ -125,7 +160,7 @@ class TransactionFlowTest {
                                 }
                                 """.formatted(accountId)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorCode").value("INVALID_TRANSACTION_REQUEST"))
+                .andExpect(jsonPath("$.error_code").value("INVALID_TRANSACTION_REQUEST"))
                 .andExpect(jsonPath("$.message").value("Amount must be greater than zero"));
     }
 
@@ -147,8 +182,8 @@ class TransactionFlowTest {
                                   "description": "Wrong currency"
                                 }
                                 """.formatted(accountId)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorCode").value("INVALID_TRANSACTION_REQUEST"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error_code").value("CURRENCY_MISMATCH"))
                 .andExpect(jsonPath("$.message").value("Currency must match account currency"));
     }
 
@@ -273,8 +308,8 @@ class TransactionFlowTest {
                                 "description": "Too much"
                                 }
                                 """.formatted(accountId)))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.errorCode").value("INSUFFICIENT_FUNDS"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error_code").value("INSUFFICIENT_FUNDS"))
                 .andExpect(jsonPath("$.message").value("Insufficient funds"));
     }
 
@@ -297,8 +332,8 @@ class TransactionFlowTest {
                                   "description": "Too much"
                                 }
                                 """.formatted(accountId)))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.errorCode").value("INSUFFICIENT_FUNDS"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error_code").value("INSUFFICIENT_FUNDS"))
                 .andExpect(jsonPath("$.message").value("Insufficient funds"));
 
         mockMvc.perform(get("/transactions")

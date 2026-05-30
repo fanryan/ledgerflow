@@ -51,7 +51,7 @@ class AuthFlowTest {
                                 }
                                 """))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.errorCode").value("INVALID_CREDENTIALS"))
+                .andExpect(jsonPath("$.error_code").value("INVALID_CREDENTIALS"))
                 .andExpect(jsonPath("$.message").value("Invalid email or password"));
     }
 
@@ -95,13 +95,13 @@ class AuthFlowTest {
                                 }
                                 """))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.errorCode").value("INVALID_TOKEN"));
+                .andExpect(jsonPath("$.error_code").value("INVALID_TOKEN"));
     }
 
     @Test
     void authMeRequiresAuthentication() throws Exception {
         mockMvc.perform(get("/auth/me"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

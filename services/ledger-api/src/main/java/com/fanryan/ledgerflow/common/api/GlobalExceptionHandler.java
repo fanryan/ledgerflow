@@ -8,6 +8,9 @@ import com.fanryan.ledgerflow.auth.InvalidCredentialsException;
 import com.fanryan.ledgerflow.auth.InvalidTokenException;
 import com.fanryan.ledgerflow.account.AccountNotFoundException;
 import com.fanryan.ledgerflow.account.AccountOwnershipException;
+import com.fanryan.ledgerflow.transaction.CurrencyMismatchException;
+import com.fanryan.ledgerflow.transaction.ExpiredIdempotencyKeyException;
+import com.fanryan.ledgerflow.transaction.IdempotencyConflictException;
 import com.fanryan.ledgerflow.transaction.InvalidTransactionRequestException;
 import com.fanryan.ledgerflow.transaction.InsufficientFundsException;
 import org.springframework.http.HttpStatus;
@@ -75,6 +78,48 @@ public class GlobalExceptionHandler {
         );
     }
 
+    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+    @ExceptionHandler(CurrencyMismatchException.class)
+    public ErrorResponse handleCurrencyMismatch(
+            CurrencyMismatchException exception,
+            WebRequest request
+    ) {
+        return new ErrorResponse(
+                "CURRENCY_MISMATCH",
+                exception.getMessage(),
+                UUID.randomUUID().toString(),
+                OffsetDateTime.now()
+        );
+    }
+
+    @ResponseStatus(HttpStatus.CONFLICT)
+    @ExceptionHandler(IdempotencyConflictException.class)
+    public ErrorResponse handleIdempotencyConflict(
+            IdempotencyConflictException exception,
+            WebRequest request
+    ) {
+        return new ErrorResponse(
+                "IDEMPOTENCY_CONFLICT",
+                exception.getMessage(),
+                UUID.randomUUID().toString(),
+                OffsetDateTime.now()
+        );
+    }
+
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(ExpiredIdempotencyKeyException.class)
+    public ErrorResponse handleExpiredIdempotencyKey(
+            ExpiredIdempotencyKeyException exception,
+            WebRequest request
+    ) {
+        return new ErrorResponse(
+                "EXPIRED_IDEMPOTENCY_KEY",
+                exception.getMessage(),
+                UUID.randomUUID().toString(),
+                OffsetDateTime.now()
+        );
+    }
+
     @ResponseStatus(HttpStatus.NOT_FOUND)
     @ExceptionHandler(AccountNotFoundException.class)
     public ErrorResponse handleAccountNotFound(
@@ -103,7 +148,7 @@ public class GlobalExceptionHandler {
         );
     }
 
-    @ResponseStatus(HttpStatus.CONFLICT)
+    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
     @ExceptionHandler(InsufficientFundsException.class)
     public ErrorResponse handleInsufficientFunds(
             InsufficientFundsException exception,

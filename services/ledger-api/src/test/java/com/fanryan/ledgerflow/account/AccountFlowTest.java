@@ -35,7 +35,7 @@ class AccountFlowTest {
                                   "currency": "USD"
                                 }
                                 """))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -61,7 +61,7 @@ class AccountFlowTest {
     @Test
     void listAccountsRequiresAuthentication() throws Exception {
         mockMvc.perform(get("/accounts"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -116,7 +116,7 @@ class AccountFlowTest {
                                 }
                                 """))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorCode").value("INVALID_ACCOUNT_REQUEST"))
+                .andExpect(jsonPath("$.error_code").value("INVALID_ACCOUNT_REQUEST"))
                 .andExpect(jsonPath("$.message").value("Currency must be a 3-letter code"));
     }
 
@@ -139,7 +139,7 @@ class AccountFlowTest {
     @Test
     void listLedgerEntriesRequiresAuthentication() throws Exception {
         mockMvc.perform(get("/accounts/00000000-0000-0000-0000-000000000001/ledger-entries"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

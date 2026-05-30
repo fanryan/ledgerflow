@@ -33,21 +33,23 @@ Current implemented Spring Boot slice:
 - account request validation with clean `400` errors
 - account flow tests covering protected access, creation, listing, invalid currency, currency normalization, and account ledger entry listing
 - `transactions` table
+- `idempotency_keys` table
 - `ledger_entries` table
 - `POST /transactions`
 - `GET /transactions`
-- idempotency lookup through `Idempotency-Key`
+- idempotency lookup through `Idempotency-Key`, request hash, and stored response metadata
+- duplicate idempotency key with a different payload returns `409`
 - transaction ownership and currency validation
-- transaction flow tests covering auth, successful submission, idempotency, invalid amount, and currency mismatch
+- transaction flow tests covering auth, successful submission, idempotency replay, idempotency conflict, invalid amount, and currency mismatch
 - transaction posting updates account balances
 - successful transactions return `POSTED`
 - deposit and withdrawal create balanced ledger entries
 - USD settlement system account is seeded for offset entries
-- insufficient funds returns `409`
+- insufficient funds returns `422`
 - insufficient funds records a `FAILED` transaction row
 - idempotent retries must not update balances twice
 
-Planned scope includes richer system-account modeling, optimistic concurrency hardening, transactional outbox, Spring Kafka consumers, reconciliation, and dead-letter replay.
+Planned scope includes richer system-account modeling, optimistic concurrency hardening, reversals, transactional outbox, Spring Kafka consumers, PayFlow event consumption, balance snapshots, reconciliation, and dead-letter replay.
 
 ## Architecture Rules
 
@@ -83,7 +85,7 @@ docker-compose.yml         Local infrastructure entrypoint
 - Keep configuration in `src/main/resources/application.yml` unless a secret should come from the environment.
 - Do not add JPA/Hibernate unless the project deliberately changes away from Spring Data JDBC.
 - Use a global `@ControllerAdvice` for HTTP exception handling.
-- Map API errors to the current standard error response shape: `errorCode`, `message`, `requestId`, and `timestamp`.
+- Map API errors to the current standard error response shape: `error_code`, `message`, `request_id`, and `timestamp`.
 
 Useful commands:
 
@@ -124,7 +126,9 @@ V<number>__description.sql
 - Account updates should preserve optimistic concurrency through the Spring Data `@Version` field.
 - Account ledger entry listing must verify account ownership before returning ledger rows.
 - Transactions are scoped to users with `transactions.owner_user_id`.
-- Transaction idempotency is scoped by `(owner_user_id, idempotency_key)`.
+- Transaction idempotency is enforced through `idempotency_keys.key`, `request_hash`, `transaction_id`, `response_status`, and `response_body`.
+- Reusing an idempotency key with the same payload must replay the original transaction result.
+- Reusing an idempotency key with a different payload must return `409 IDEMPOTENCY_CONFLICT`.
 - Failed transaction rows should remain queryable when a business-rule failure has already been accepted as a transaction command.
 - Ledger entries must be derived from accepted transaction commands and remain auditable.
 - Current ledger posting creates balanced entries between the user account and the seeded USD settlement system account.

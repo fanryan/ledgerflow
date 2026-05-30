@@ -147,7 +147,7 @@ ledgerflow/
 
 ## Current Status
 
-Current stage: **Milestone 3 - Double-Entry Transaction Posting Foundation**
+Current stage: **Milestone 2 - Failure Handling, Concurrency, and Reversals**
 
 Implemented:
 
@@ -178,18 +178,20 @@ Implemented:
 - Account request validation with clean `400` errors
 - Account flow tests for protected access, creation, listing, invalid currency, currency normalization, and ledger entry listing
 - `transactions` table migration
+- `idempotency_keys` table migration
 - `ledger_entries` table migration
 - `POST /transactions` authenticated transaction submission endpoint
 - `GET /transactions` authenticated transaction listing endpoint
-- Idempotency lookup through `Idempotency-Key`
+- Idempotency lookup through `Idempotency-Key`, request hash, and stored response metadata
+- Duplicate idempotency key with a different payload returns `409`
 - Account ownership check before transaction creation
 - Transaction request validation with clean errors
-- Transaction flow tests for auth, successful submission, idempotency, invalid amount, and currency mismatch
+- Transaction flow tests for auth, successful submission, idempotency replay, idempotency conflict, invalid amount, and currency mismatch
 - Transaction posting updates account balances
 - Successful transactions return `POSTED`
 - Deposit and withdrawal create balanced ledger entries
 - USD settlement system account is seeded for offset entries
-- Insufficient funds returns `409`
+- Insufficient funds returns `422`
 - Insufficient funds records a `FAILED` transaction row
 - Idempotent retries do not update balances twice
 
@@ -315,32 +317,33 @@ gradle test
 - JWT authentication
 - Account creation
 - Account listing
+- Double-entry ledger posting for deposits and withdrawals
+- Basic transaction state machine with `PENDING` and `POSTED`
 
 ### Milestone 2
 
-- Ledger-backed transaction posting foundation
-- Idempotency foundation
-- Balance updates
-- Insufficient funds handling
+- Transaction `FAILED` status on insufficient funds
+- Optimistic concurrency with server-side retry loop
+- Reversal support with compensating ledger entries
+- Concurrent transaction tests
 
 ### Milestone 3
 
-- Double-entry ledger posting
-- System settlement account
-- Optimistic concurrency
-- Reversal support
-- Concurrent transaction tests
+- Transactional outbox table and schema
+- Claim-based outbox publisher
+- Kafka publishing with retry and dead-letter routing
 
 ### Milestone 4
 
-- Transactional outbox
-- Kafka publishing
-- Retry handling
-- Dead-letter routing
+- Spring Boot Kafka consumers
+- PayFlow consumer for `payment.captured` and `payment.settled`
+- Reconciliation jobs with structured report output
+- Scheduled reconciliation
+- Dead-letter replay tooling
 
 ### Milestone 5
 
-- Integration tests
+- Balance snapshot mechanism
+- Integration tests via Testcontainers
 - Benchmarks
-- Observability
 - Architecture documentation

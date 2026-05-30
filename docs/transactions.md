@@ -12,10 +12,12 @@ The Spring Boot API currently supports:
 
 - `transactions` table through Flyway migration `V4__create_transactions_table.sql`.
 - `ledger_entries` table through Flyway migration `V5__create_ledger_entries_table.sql`.
+- `idempotency_keys` table through Flyway migration `V7__create_idempotency_keys_table.sql`.
 - Authenticated `POST /transactions`.
 - Authenticated `GET /transactions`.
 - `Idempotency-Key` request header.
-- Idempotency lookup scoped by `(owner_user_id, idempotency_key)`.
+- Idempotency request hash conflict detection.
+- Stored idempotency response metadata.
 - Account existence check before transaction creation.
 - Account ownership check before transaction creation.
 - Transaction currency validation against the account currency.
@@ -24,13 +26,13 @@ The Spring Boot API currently supports:
 - Successful transactions updated to `POSTED`.
 - Deposits increase account balance.
 - Withdrawals decrease account balance.
-- Insufficient withdrawals return `409 INSUFFICIENT_FUNDS`.
+- Insufficient withdrawals return `422 INSUFFICIENT_FUNDS`.
 - Insufficient withdrawals are recorded as `FAILED` transactions.
 - Balanced ledger entries are written for deposits and withdrawals.
 - USD settlement system account seeded by `V6__seed_system_account.sql`.
 - `SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID` centralizes the settlement account UUID in Java.
 - Java models and repositories for `Transaction` and `LedgerEntry`.
-- Transaction flow tests for auth, listing, successful submission, idempotency, invalid amount, currency mismatch, balance updates, insufficient funds, failed transaction recording, idempotent retry balance safety, and balanced ledger entries.
+- Transaction flow tests for auth, listing, successful submission, idempotency replay, idempotency conflict, invalid amount, currency mismatch, balance updates, insufficient funds, failed transaction recording, idempotent retry balance safety, and balanced ledger entries.
 
 ### Not Implemented Yet
 
@@ -189,38 +191,51 @@ PostgreSQL transactions table
 The current idempotency rule is:
 
 ```text
-One owner user id + one idempotency key = one transaction result
+One idempotency key + one request hash = one transaction result
 ```
 
-Database constraint:
+Database table:
 
-```sql
-CONSTRAINT transactions_idempotency_unique_per_owner
-UNIQUE (owner_user_id, idempotency_key)
+```text
+idempotency_keys
 ```
 
-Service lookup:
+Important columns:
 
-```java
-findByOwnerUserIdAndIdempotencyKey(ownerUserId, normalizedIdempotencyKey)
-```
+- `key`: idempotency key from the `Idempotency-Key` header.
+- `owner_user_id`: authenticated user that created the key.
+- `request_hash`: SHA-256 hash of the transaction request payload.
+- `transaction_id`: transaction created by the first request.
+- `response_status`: stored transaction response status such as `POSTED` or `FAILED`.
+- `response_body`: stored JSON response metadata.
+- `expires_at`: expiry timestamp after which the key is invalid.
 
-If a matching transaction exists, the service returns it instead of creating a duplicate.
+Service behavior:
 
 ```text
 First request
   |
-  +--> no existing owner/key row
+  +--> no existing idempotency key row
   +--> create transaction A
+  +--> save idempotency key + request hash + response metadata
   +--> create balanced ledger entries
   +--> update account balance
 
-Second request with same owner/key
+Second request with same key and same payload
   |
-  +--> transaction A already exists
+  +--> idempotency key exists
+  +--> request hash matches
   +--> return transaction A
   +--> no additional ledger entries
   +--> no additional balance update
+
+Second request with same key and different payload
+  |
+  +--> idempotency key exists
+  +--> request hash differs
+  +--> return 409 IDEMPOTENCY_CONFLICT
+  +--> no transaction is created
+  +--> no balance movement occurs
 ```
 
 Current note: the controller still returns `201 Created` for both first and repeated idempotent submissions because it is annotated with `@ResponseStatus(HttpStatus.CREATED)`. The important behavior today is duplicate prevention, same-result return, and no duplicate balance movement.
@@ -238,7 +253,7 @@ POST /transactions WITHDRAWAL
   +--> calculate new balance
   +--> insufficient funds
   +--> update transaction to FAILED
-  +--> return 409 INSUFFICIENT_FUNDS
+  +--> return 422 INSUFFICIENT_FUNDS
 ```
 
 The service uses:
@@ -247,7 +262,7 @@ The service uses:
 @Transactional(noRollbackFor = InsufficientFundsException.class)
 ```
 
-That matters because `InsufficientFundsException` is a runtime exception. By default, Spring rolls back transactions for runtime exceptions. `noRollbackFor` lets LedgerFlow keep the `FAILED` transaction row while still returning a `409` response.
+That matters because `InsufficientFundsException` is a runtime exception. By default, Spring rolls back transactions for runtime exceptions. `noRollbackFor` lets LedgerFlow keep the `FAILED` transaction row while still returning a `422` response.
 
 No ledger entries are created for the failed withdrawal, and the account balance is not changed.
 
@@ -281,6 +296,26 @@ Important indexes:
 - `idx_transactions_owner_created_at`
 
 The owner/time index supports listing a user's transactions newest-first.
+
+### `idempotency_keys`
+
+Created by:
+
+```text
+services/ledger-api/src/main/resources/db/migration/V7__create_idempotency_keys_table.sql
+```
+
+Important columns:
+
+- `key`: idempotency key primary key.
+- `owner_user_id`: authenticated user that created the idempotency record.
+- `request_hash`: SHA-256 hash of the request payload.
+- `transaction_id`: transaction associated with the first accepted request.
+- `response_status`: stored response status metadata.
+- `response_body`: stored JSON response metadata.
+- `expires_at`: key expiry timestamp.
+
+This table closes the important idempotency gap: a duplicate key with a different payload is no longer treated as a retry.
 
 ### `ledger_entries`
 
@@ -387,9 +422,45 @@ CrudRepository<Transaction, UUID>
 
 Important derived queries:
 
-- `findByOwnerUserIdAndIdempotencyKey(...)`
 - `findByOwnerUserIdOrderByCreatedAtDesc(...)`
 - `findByAccountIdOrderByCreatedAtDesc(...)`
+
+Idempotency decisions happen through `IdempotencyRepository`, not through a transaction-table lookup.
+
+### `IdempotencyRepository.java`
+
+Uses `NamedParameterJdbcTemplate` for the `idempotency_keys` table.
+
+It can:
+
+- find an idempotency record by key
+- save the request hash, transaction id, response status, response body, and expiry
+
+This repository uses explicit SQL because `response_body` is a PostgreSQL `jsonb` column.
+
+### `IdempotencyRecord.java`
+
+Small data carrier for one row in `idempotency_keys`.
+
+### `IdempotencyConflictException.java`
+
+Thrown when a duplicate idempotency key is reused with a different request payload.
+
+Mapped to:
+
+```text
+409 IDEMPOTENCY_CONFLICT
+```
+
+### `ExpiredIdempotencyKeyException.java`
+
+Thrown when a request tries to reuse an expired idempotency key.
+
+Mapped to:
+
+```text
+400 EXPIRED_IDEMPOTENCY_KEY
+```
 
 ### `Transaction.java`
 
@@ -469,7 +540,8 @@ Examples:
 Mapped to:
 
 ```text
-400 INVALID_TRANSACTION_REQUEST
+400 INVALID_TRANSACTION_REQUEST for malformed transaction input
+422 CURRENCY_MISMATCH for account/transaction currency mismatch
 ```
 
 ### `AccountNotFoundException.java`
@@ -544,15 +616,23 @@ This points to the seeded USD settlement account used for offset entries.
 
 Idempotency is request metadata, not transaction business content. This mirrors payment-style APIs where clients retry the same logical request with the same key.
 
-### Why Idempotency Is Scoped By Owner
+### Why Idempotency Uses Request Hashes
 
-Two different users should be able to use the same idempotency key without colliding.
+Idempotency should only replay the original result when the retry is the same logical request.
 
-The unique constraint is:
+If the same key is reused with a different amount, account, type, currency, or description, LedgerFlow returns:
 
 ```text
-owner_user_id + idempotency_key
+409 IDEMPOTENCY_CONFLICT
 ```
+
+This prevents a client from accidentally or maliciously reusing an old key for a different transaction.
+
+### Why Idempotency Stores Response Metadata
+
+The `idempotency_keys` table stores response metadata so the system can explain what the first request produced.
+
+Current retry behavior reloads the associated transaction and returns the same transaction result. The stored response body prepares the project for exact HTTP response replay as the API contract becomes stricter.
 
 ### Why Transaction Listing Is Scoped By Owner
 
@@ -599,7 +679,7 @@ user tried withdrawal -> system rejected it -> reason was insufficient funds
 The current API response remains:
 
 ```text
-409 INSUFFICIENT_FUNDS
+422 INSUFFICIENT_FUNDS
 ```
 
 The failed row is visible later through:
@@ -657,11 +737,21 @@ Those directions describe the user account entry. The settlement account receive
 
 ### Reused Idempotency Keys Return Old Results
 
-If a test or curl request reuses the same `Idempotency-Key`, the API should return the existing transaction.
+If a test or curl request reuses the same `Idempotency-Key` with the same payload, the API should return the existing transaction.
 
 That is correct behavior. Use a unique key when testing new transaction creation.
 
 Idempotent retries must also avoid duplicate balance updates. The tests verify this.
+
+### Same Idempotency Key With Different Payload Returns 409
+
+If the request hash differs from the stored hash, LedgerFlow returns:
+
+```text
+409 IDEMPOTENCY_CONFLICT
+```
+
+That means the request is not a retry. It is a different command using a previously used key.
 
 ### Java-Generated UUIDs Need `@Version`
 
@@ -675,11 +765,11 @@ This was fixed by adding:
 
 to `Transaction`.
 
-### `403` Can Hide An Internal Error
+### Protected Endpoints Return `401` Without A Valid JWT
 
-If an endpoint throws unexpectedly and the app forwards to `/error`, Spring Security may return `403` because `/error` is protected.
+Protected endpoints return `401 UNAUTHORIZED` when the JWT is missing or invalid.
 
-When this happens, check the application logs or test report for the underlying exception.
+`403 ACCOUNT_FORBIDDEN` is reserved for authenticated users trying to access an account they do not own.
 
 ### `FAILED` Row Disappears After Throwing
 
@@ -706,54 +796,57 @@ For insufficient funds, LedgerFlow avoids that with:
    It lets clients safely retry the same request without creating duplicate transactions.
 
 5. **How is idempotency scoped?**  
-   By `(owner_user_id, idempotency_key)`.
+   By the idempotency key and stored request hash in `idempotency_keys`.
 
 6. **What happens when the same user sends the same idempotency key again?**  
-   The service returns the existing transaction instead of creating a new row.
+   If the request hash matches, the service returns the existing transaction instead of creating a new row.
 
-7. **Why does the transaction table include `owner_user_id`?**  
+7. **What happens when the same idempotency key is reused with a different payload?**  
+   The API returns `409 IDEMPOTENCY_CONFLICT` and creates no transaction or balance movement.
+
+8. **Why does the transaction table include `owner_user_id`?**  
    It scopes idempotency and supports user-specific transaction queries.
 
-8. **Why check account ownership?**  
+9. **Why check account ownership?**  
    A user must not submit transactions against another user's account.
 
-9. **Why validate currency against the account?**  
+10. **Why validate currency against the account?**  
    A transaction should not post `SGD` against a `USD` account.
 
-10. **Why are amounts stored as `amount_minor`?**  
+11. **Why are amounts stored as `amount_minor`?**  
     Minor-unit integers avoid floating point money errors.
 
-11. **Why does `Transaction` have `@Version`?**  
+12. **Why does `Transaction` have `@Version`?**  
     It helps Spring Data JDBC insert Java-generated UUID rows correctly and prepares for optimistic concurrency.
 
-12. **Why does the service save a `PENDING` transaction first?**  
+13. **Why does the service save a `PENDING` transaction first?**  
     It records the command before posting, then updates the transaction to `POSTED` inside the same database transaction.
 
-13. **What makes a transaction `POSTED` today?**  
+14. **What makes a transaction `POSTED` today?**  
     Successful ledger entry creation and account balance update.
 
-14. **What makes a transaction `FAILED` today?**  
-    An insufficient-funds withdrawal creates a `FAILED` transaction row and returns `409 INSUFFICIENT_FUNDS`.
+15. **What makes a transaction `FAILED` today?**  
+    An insufficient-funds withdrawal creates a `FAILED` transaction row and returns `422 INSUFFICIENT_FUNDS`.
 
-15. **Why separate `transactions` from `ledger_entries`?**  
+16. **Why separate `transactions` from `ledger_entries`?**  
     Transactions are user commands; ledger entries are accounting facts.
 
-16. **What happens on insufficient funds?**  
-    The service saves the transaction as `FAILED`, throws `InsufficientFundsException`, and the API returns `409 INSUFFICIENT_FUNDS`.
+17. **What happens on insufficient funds?**  
+    The service saves the transaction as `FAILED`, throws `InsufficientFundsException`, and the API returns `422 INSUFFICIENT_FUNDS`.
 
-17. **How does double-entry work here today?**  
+18. **How does double-entry work here today?**  
     Deposits credit the user account and debit the USD settlement account. Withdrawals debit the user account and credit the USD settlement account.
 
-18. **What does the balanced ledger test prove?**  
+19. **What does the balanced ledger test prove?**  
     For a transaction, total debits equal total credits.
 
-19. **What does `GET /transactions` return?**  
+20. **What does `GET /transactions` return?**  
     It returns the authenticated user's transactions, newest first.
 
-20. **Why does `GET /transactions` not accept a user id parameter?**  
+21. **Why does `GET /transactions` not accept a user id parameter?**  
     The user id comes from the validated JWT so callers cannot request another user's transaction history.
 
-21. **Why does `submitTransaction` use `noRollbackFor`?**  
+22. **Why does `submitTransaction` use `noRollbackFor`?**  
     Without it, Spring would roll back the saved `FAILED` row when `InsufficientFundsException` is thrown.
 
 ## 12. Checklist Before Moving On
@@ -764,6 +857,8 @@ Before moving on to reversals or outbox, be able to explain:
 - [ ] Why `GET /transactions` is scoped to the authenticated user.
 - [ ] Why idempotency key lives in a header.
 - [ ] How repeated idempotency keys return the same transaction.
+- [ ] How request hashes detect idempotency key misuse.
+- [ ] Why different payloads with the same idempotency key return `409`.
 - [ ] Why account ownership is checked after loading the account.
 - [ ] Why transaction currency must match account currency.
 - [ ] Why transactions are saved as `PENDING` first and then updated to `POSTED`.

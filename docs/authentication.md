@@ -252,9 +252,9 @@ with:
 
 ```json
 {
-  "errorCode": "INVALID_CREDENTIALS",
+  "error_code": "INVALID_CREDENTIALS",
   "message": "Invalid email or password",
-  "requestId": "...",
+  "request_id": "...",
   "timestamp": "..."
 }
 ```
@@ -337,9 +337,9 @@ with:
 
 ```json
 {
-  "errorCode": "INVALID_TOKEN",
+  "error_code": "INVALID_TOKEN",
   "message": "Invalid or expired token",
-  "requestId": "...",
+  "request_id": "...",
   "timestamp": "..."
 }
 ```
@@ -618,12 +618,12 @@ Standard error response DTO.
 
 Current fields:
 
-- `errorCode`
+- `error_code`
 - `message`
-- `requestId`
+- `request_id`
 - `timestamp`
 
-This repo currently uses camelCase JSON fields.
+This repo uses snake_case JSON fields for error responses to match the PRD contract.
 
 ### `GlobalExceptionHandler.java`
 
@@ -883,7 +883,7 @@ Both are useful. For example, an `ADMIN` may inspect operational state while a n
 
 `401 Unauthorized` usually means authentication failed or credentials are missing/invalid.
 
-`403 Forbidden` usually means authentication is absent or insufficient for the configured authorization rules. In this project, disabled form/basic auth can make unauthenticated protected requests show as `403`.
+`403 Forbidden` usually means the user is authenticated but not allowed to perform the operation.
 
 ### Missing Authorization Header
 
@@ -901,7 +901,7 @@ If the token is malformed, expired, tampered with, or signed with the wrong secr
 
 ### Wrong BCrypt Hash
 
-If the seeded hash does not match the expected password, login fails even when the email is correct. This caused a misleading `403` earlier because the failure path forwarded into protected error handling before the explicit exception handler existed.
+If the seeded hash does not match the expected password, login fails even when the email is correct. Earlier versions of the project could produce misleading authorization behavior before the explicit exception handler and stateless security entry point were added.
 
 ### Flyway Migration Already Applied
 

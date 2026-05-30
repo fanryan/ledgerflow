@@ -706,9 +706,9 @@ returns:
 
 ```json
 {
-  "errorCode": "INVALID_ACCOUNT_REQUEST",
+  "error_code": "INVALID_ACCOUNT_REQUEST",
   "message": "Currency must be a 3-letter code",
-  "requestId": "...",
+  "request_id": "...",
   "timestamp": "..."
 }
 ```

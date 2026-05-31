@@ -54,8 +54,10 @@ Current implemented Spring Boot slice:
 - reversal requests require an idempotency key and reason
 - idempotent reversal retries must return the existing reversal without changing balances twice
 - reusing a reversal idempotency key with a different payload returns `409`
+- optimistic locking conflicts return `409 CONCURRENT_TRANSACTION_CONFLICT`
+- concurrent withdrawal tests prove racing requests do not overdraw an account
 
-Planned scope includes richer system-account modeling, optimistic concurrency hardening, transactional outbox, Spring Kafka consumers, PayFlow event consumption, balance snapshots, reconciliation, and dead-letter replay.
+Planned scope includes richer system-account modeling, transactional outbox, Spring Kafka consumers, PayFlow event consumption, balance snapshots, reconciliation, and dead-letter replay.
 
 ## Architecture Rules
 
@@ -142,6 +144,8 @@ V<number>__description.sql
 - Transaction reversals must be modeled as new offsetting transactions, not deletes or destructive edits.
 - Reversal metadata lives on `transactions.reversal_of_transaction_id` and `transactions.reversed_at`.
 - Reversal idempotency must use the same `idempotency_keys` conflict rules as normal submissions.
+- Account balance updates rely on optimistic locking through the account `@Version` field.
+- Concurrent account balance write conflicts should return `409 CONCURRENT_TRANSACTION_CONFLICT`, not leak framework exceptions.
 
 ## Security Rules
 
@@ -178,7 +182,8 @@ docker compose config
 - Account tests should cover protected access, account creation, ownership from JWT subject, listing by current user, invalid request handling, and normalization.
 - Transaction tests should cover authentication, listing by current user, idempotency, ownership checks, validation, currency mismatch, balance updates, and insufficient funds.
 - Reversal tests should cover offsetting transaction creation, balance restoration, double-reversal rejection, required reason validation, and idempotency.
-- Ledger posting tests should cover ledger entry creation, idempotent retry safety, balanced debits/credits, and concurrent transaction races.
+- Concurrency tests should cover simultaneous withdrawals and verify the final account balance cannot go negative.
+- Ledger posting tests should cover ledger entry creation, idempotent retry safety, and balanced debits/credits.
 
 ## Local Development Commands
 

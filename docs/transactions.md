@@ -1,6 +1,6 @@
 # Transactions
 
-This document explains the current LedgerFlow transaction foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, recording `FAILED` rows for insufficient funds, and reversing posted transactions with offsetting ledger entries.
+This document explains the current LedgerFlow transaction foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, recording `FAILED` rows for insufficient funds, reversing posted transactions with offsetting ledger entries, and handling concurrent balance updates safely.
 
 The current implementation creates two balanced ledger entries per posted transaction: one for the user account and one for the seeded USD settlement system account.
 
@@ -37,10 +37,13 @@ The Spring Boot API currently supports:
 - Reversal transactions point to the original through `reversal_of_transaction_id`.
 - Reversal requests require a reason.
 - Reversal requests are idempotent through the same `idempotency_keys` table.
+- Optimistic locking conflict handling for concurrent account balance updates.
+- `409 CONCURRENT_TRANSACTION_CONFLICT` for racing writes against the same account balance.
 - USD settlement system account seeded by `V6__seed_system_account.sql`.
 - `SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID` centralizes the settlement account UUID in Java.
 - Java models and repositories for `Transaction` and `LedgerEntry`.
 - Transaction flow tests for auth, listing, successful submission, idempotency replay, idempotency conflict, invalid amount, currency mismatch, balance updates, insufficient funds, failed transaction recording, idempotent retry balance safety, account-state guards, balanced ledger entries, reversals, double-reversal rejection, and reversal idempotency.
+- Transaction concurrency test proving simultaneous withdrawals cannot overdraw an account.
 
 ### Not Implemented Yet
 
@@ -280,7 +283,44 @@ Original DEPOSIT    -> reversal WITHDRAWAL
 Original WITHDRAWAL -> reversal DEPOSIT
 ```
 
-## 6. Idempotency Flow
+## 6. Concurrency Flow
+
+LedgerFlow uses optimistic locking on account rows to protect balances under concurrent writes.
+
+The account model has a Spring Data `@Version` field. When two requests read the same account version and both try to save updates, only the first save succeeds. The second save sees that the database version has changed and Spring throws an optimistic locking failure.
+
+`TransactionService` catches that framework exception and converts it into a LedgerFlow domain/API error:
+
+```text
+409 CONCURRENT_TRANSACTION_CONFLICT
+```
+
+Example race:
+
+```text
+Account balance = 1000
+
+Withdrawal A reads balance 1000, version 1
+Withdrawal B reads balance 1000, version 1
+
+Withdrawal A saves balance 300, version becomes 2
+Withdrawal B tries to save balance 300 using old version 1
+Withdrawal B gets optimistic locking conflict
+
+Final balance = 300
+```
+
+The important outcome is that LedgerFlow does not allow both withdrawals to spend the same starting balance.
+
+Current test coverage:
+
+```text
+TransactionConcurrencyTest.concurrentWithdrawalsDoNotOverdrawAccount
+```
+
+The test sends two simultaneous withdrawals of `700` against a `1000` balance. One request succeeds with `201`, the other returns `409`, and the final balance remains `300`.
+
+## 7. Idempotency Flow
 
 The current idempotency rule is:
 
@@ -360,7 +400,7 @@ That matters because `InsufficientFundsException` is a runtime exception. By def
 
 No ledger entries are created for the failed withdrawal, and the account balance is not changed.
 
-## 7. Database Design
+## 8. Database Design
 
 ### `transactions`
 
@@ -465,7 +505,7 @@ Current constant:
 SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID
 ```
 
-## 8. File-by-File Explanation
+## 9. File-by-File Explanation
 
 ### `TransactionController.java`
 
@@ -754,7 +794,7 @@ USD_SETTLEMENT_ACCOUNT_ID
 
 This points to the seeded USD settlement account used for offset entries.
 
-## 9. Design Decisions
+## 10. Design Decisions
 
 ### Why Idempotency Uses a Header
 
@@ -909,7 +949,7 @@ same key + same reversal payload      -> replay original reversal
 same key + different reversal payload -> 409 IDEMPOTENCY_CONFLICT
 ```
 
-## 10. Common Debugging Lessons
+## 11. Common Debugging Lessons
 
 ### Reused Idempotency Keys Return Old Results
 
@@ -971,7 +1011,19 @@ no additional balance change
 
 If the reason or transaction id changes while reusing the same key, the API returns `409 IDEMPOTENCY_CONFLICT`.
 
-## 11. Interview Questions and Answers
+### Concurrent Withdrawals Return 409 For The Losing Request
+
+If two withdrawals race against the same account balance, one may successfully commit first. The other may fail because its in-memory account version is stale.
+
+LedgerFlow maps that stale-version failure to:
+
+```text
+409 CONCURRENT_TRANSACTION_CONFLICT
+```
+
+That response means the client should reload state and decide whether to retry. It is different from `422 INSUFFICIENT_FUNDS`: insufficient funds is a business-rule failure based on the current balance, while `409` is a write conflict caused by concurrent modification.
+
+## 12. Interview Questions and Answers
 
 1. **What does the transaction endpoint currently do?**  
    It accepts an authenticated transaction command, creates balanced ledger entries, updates the account balance, and returns a `POSTED` transaction.
@@ -1051,9 +1103,15 @@ If the reason or transaction id changes while reusing the same key, the API retu
 26. **What prevents double reversal?**  
     The service rejects reversal when the original transaction already has `reversed_at`.
 
-## 12. Checklist Before Moving On
+27. **How does LedgerFlow prevent concurrent withdrawals from overdrawing an account?**  
+    Account rows use optimistic locking. If two requests race using the same account version, one update wins and the stale update returns `409 CONCURRENT_TRANSACTION_CONFLICT`.
 
-Before moving on to concurrency hardening or outbox, be able to explain:
+28. **Why return 409 for an optimistic locking conflict?**  
+    It is a state conflict, not malformed input. The client should reload the account state before retrying.
+
+## 13. Checklist Before Moving On
+
+Before moving on to outbox, be able to explain:
 
 - [ ] Why `POST /transactions` requires authentication.
 - [ ] Why `GET /transactions` is scoped to the authenticated user.
@@ -1078,3 +1136,6 @@ Before moving on to concurrency hardening or outbox, be able to explain:
 - [ ] How `reversalOfTransactionId` and `reversedAt` differ.
 - [ ] Why reversal also needs idempotency.
 - [ ] Why a double reversal is rejected.
+- [ ] How optimistic locking protects account balance updates.
+- [ ] Why simultaneous withdrawals can produce one `201` and one `409`.
+- [ ] Why `409 CONCURRENT_TRANSACTION_CONFLICT` is different from `422 INSUFFICIENT_FUNDS`.

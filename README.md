@@ -201,10 +201,10 @@ Implemented:
 - Reversal requests require an idempotency key and reason
 - Reversal idempotent retries return the original reversal result
 - Reusing a reversal idempotency key with a different payload returns `409`
+- Optimistic locking conflicts return `409 CONCURRENT_TRANSACTION_CONFLICT`
+- Concurrent withdrawal tests prove the account cannot be overdrawn by racing requests
 
-Next:
-
-- Concurrency tests for simultaneous withdrawals
+Next: Milestone 3 transactional outbox and Kafka publishing.
 
 ## Local Development
 
@@ -344,7 +344,7 @@ gradle test
 - Account-state transaction guards for frozen and closed accounts
 - Reversal support with compensating ledger entries
 - Idempotent reversal retries
-- Optimistic concurrency with server-side retry loop
+- Optimistic concurrency conflict handling
 - Concurrent transaction tests
 
 ### Milestone 3

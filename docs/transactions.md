@@ -1,6 +1,6 @@
 # Transactions
 
-This document explains the current LedgerFlow transaction posting foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, and recording `FAILED` rows for insufficient funds.
+This document explains the current LedgerFlow transaction foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, recording `FAILED` rows for insufficient funds, and reversing posted transactions with offsetting ledger entries.
 
 The current implementation creates two balanced ledger entries per posted transaction: one for the user account and one for the seeded USD settlement system account.
 
@@ -13,8 +13,10 @@ The Spring Boot API currently supports:
 - `transactions` table through Flyway migration `V4__create_transactions_table.sql`.
 - `ledger_entries` table through Flyway migration `V5__create_ledger_entries_table.sql`.
 - `idempotency_keys` table through Flyway migration `V7__create_idempotency_keys_table.sql`.
+- Reversal metadata through Flyway migration `V8__add_transaction_reversal_fields.sql`.
 - Authenticated `POST /transactions`.
 - Authenticated `GET /transactions`.
+- Authenticated `POST /transactions/{transactionId}/reverse`.
 - `Idempotency-Key` request header.
 - Idempotency request hash conflict detection.
 - Stored idempotency response metadata.
@@ -26,20 +28,25 @@ The Spring Boot API currently supports:
 - Successful transactions updated to `POSTED`.
 - Deposits increase account balance.
 - Withdrawals decrease account balance.
+- Frozen and closed accounts cannot submit transactions.
 - Insufficient withdrawals return `422 INSUFFICIENT_FUNDS`.
 - Insufficient withdrawals are recorded as `FAILED` transactions.
 - Balanced ledger entries are written for deposits and withdrawals.
+- Reversals create a new offsetting `POSTED` transaction.
+- Reversals mark the original transaction with `reversed_at`.
+- Reversal transactions point to the original through `reversal_of_transaction_id`.
+- Reversal requests require a reason.
+- Reversal requests are idempotent through the same `idempotency_keys` table.
 - USD settlement system account seeded by `V6__seed_system_account.sql`.
 - `SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID` centralizes the settlement account UUID in Java.
 - Java models and repositories for `Transaction` and `LedgerEntry`.
-- Transaction flow tests for auth, listing, successful submission, idempotency replay, idempotency conflict, invalid amount, currency mismatch, balance updates, insufficient funds, failed transaction recording, idempotent retry balance safety, and balanced ledger entries.
+- Transaction flow tests for auth, listing, successful submission, idempotency replay, idempotency conflict, invalid amount, currency mismatch, balance updates, insufficient funds, failed transaction recording, idempotent retry balance safety, account-state guards, balanced ledger entries, reversals, double-reversal rejection, and reversal idempotency.
 
 ### Not Implemented Yet
 
 These are planned, not implemented:
 
 - Richer system-account modeling beyond the seeded USD settlement account.
-- Transaction reversal.
 - Outbox events for posted transactions.
 - Kafka publishing or consumption.
 - Reconciliation.
@@ -112,6 +119,42 @@ Current successful response:
 ```
 
 The endpoint lists transactions for the authenticated user only, newest first.
+
+### `POST /transactions/{transactionId}/reverse`
+
+Required headers:
+
+```http
+Authorization: Bearer <access_token>
+Idempotency-Key: reverse-example-001
+```
+
+Request body:
+
+```json
+{
+  "reason": "Customer requested reversal"
+}
+```
+
+Current successful response:
+
+```json
+{
+  "id": "9f582f2e-f2ca-4cc4-bec7-0a74ccf00cde",
+  "accountId": "5e824b14-77a3-4db7-882b-4c06abc2dc8b",
+  "ownerUserId": "00000000-0000-0000-0000-000000000001",
+  "idempotencyKey": "reverse-example-001",
+  "type": "WITHDRAWAL",
+  "amountMinor": 1000,
+  "currency": "USD",
+  "status": "POSTED",
+  "description": "Customer requested reversal",
+  "reversalOfTransactionId": "caea1345-da6a-4a1a-9047-96345307e010"
+}
+```
+
+The reversal is a new transaction. LedgerFlow does not delete the original transaction. The original row is marked with `reversed_at`, and the reversal row points back to it with `reversal_of_transaction_id`.
 
 ## 3. Submit Transaction Runtime Flow
 
@@ -186,7 +229,58 @@ TransactionService
 PostgreSQL transactions table
 ```
 
-## 5. Idempotency Flow
+## 5. Reverse Transaction Runtime Flow
+
+```text
+Client
+  |
+  | POST /transactions/{transactionId}/reverse
+  | Authorization: Bearer <access_token>
+  | Idempotency-Key: reverse-example-001
+  v
+Spring Security
+  |
+  +--> JwtAuthenticationFilter validates token
+  +--> principal = user UUID from JWT sub claim
+  |
+  v
+TransactionController
+  |
+  +--> ownerUserId = authentication.getPrincipal()
+  +--> transactionId = path variable
+  +--> idempotencyKey = Idempotency-Key header
+  +--> reason = request body
+  |
+  v
+TransactionService
+  |
+  +--> normalize idempotency key
+  +--> validate reversal reason
+  +--> hash transactionId + reason
+  +--> replay or reject duplicate idempotency key
+  +--> load original transaction
+  +--> verify original belongs to JWT user id
+  +--> verify original is POSTED
+  +--> verify original is not already reversed
+  +--> load account
+  +--> create opposite transaction type
+  +--> create balanced ledger entries
+  +--> update account balance
+  +--> mark original transaction reversed_at
+  +--> save idempotency record
+  |
+  v
+PostgreSQL transactions, ledger_entries, accounts, and idempotency_keys tables
+```
+
+Reversal type mapping:
+
+```text
+Original DEPOSIT    -> reversal WITHDRAWAL
+Original WITHDRAWAL -> reversal DEPOSIT
+```
+
+## 6. Idempotency Flow
 
 The current idempotency rule is:
 
@@ -287,6 +381,8 @@ Important columns:
 - `currency`: three-letter uppercase currency code.
 - `status`: `PENDING`, `POSTED`, or `FAILED`.
 - `description`: optional user-facing description.
+- `reversal_of_transaction_id`: original transaction id when this row is a reversal.
+- `reversed_at`: timestamp showing when the original transaction was reversed.
 - `version`: optimistic concurrency field.
 - `created_at`, `updated_at`: timestamps.
 
@@ -294,6 +390,7 @@ Important indexes:
 
 - `idx_transactions_account_id`
 - `idx_transactions_owner_created_at`
+- `idx_transactions_reversal_of_transaction_id`
 
 The owner/time index supports listing a user's transactions newest-first.
 
@@ -377,6 +474,7 @@ Defines:
 ```text
 POST /transactions
 GET  /transactions
+POST /transactions/{transactionId}/reverse
 ```
 
 For submission, it reads:
@@ -387,7 +485,14 @@ For submission, it reads:
 
 For listing, it reads the authenticated user id from `Authentication`.
 
-Both methods delegate to `TransactionService`.
+For reversals, it reads:
+
+- authenticated user id from `Authentication`
+- original transaction id from the path
+- idempotency key from the `Idempotency-Key` header
+- reversal reason from `ReverseTransactionRequest`
+
+All methods delegate to `TransactionService`.
 
 ### `TransactionService.java`
 
@@ -396,9 +501,11 @@ Contains transaction command business logic:
 - normalize and validate idempotency key
 - return existing transaction for repeated owner/key pair
 - list transactions by authenticated owner
+- reverse posted transactions through offsetting transactions
 - validate request body
 - load account
 - enforce account ownership
+- enforce active account status
 - enforce currency match
 - save `PENDING` transaction
 - calculate the new account balance
@@ -407,10 +514,14 @@ Contains transaction command business logic:
 - create settlement ledger entry
 - save the updated account
 - update the transaction to `POSTED`
+- mark original transactions with `reversed_at`
+- save idempotency records for transaction submissions and reversals
 
 It is wrapped in `@Transactional(noRollbackFor = InsufficientFundsException.class)`.
 
 Successful posting commits transaction creation, ledger entry creation, account balance update, and status update together. Insufficient funds still throws an API error, but the `FAILED` transaction row is committed.
+
+Reversal posting commits the reversal transaction, balanced ledger entries, account balance update, original transaction `reversed_at`, and idempotency record together.
 
 ### `TransactionRepository.java`
 
@@ -474,6 +585,11 @@ Important annotations:
 
 `@Version` matters because transactions use Java-generated UUIDs. It also prepares the model for optimistic concurrency.
 
+Reversal fields:
+
+- `reversalOfTransactionId`: set on the reversal transaction to point back to the original.
+- `reversedAt`: set on the original transaction after a successful reversal.
+
 ### `CreateTransactionRequest.java`
 
 Request DTO for `POST /transactions`.
@@ -487,6 +603,16 @@ Fields:
 - `description`
 
 The idempotency key is intentionally not in this DTO. It comes from the HTTP `Idempotency-Key` header.
+
+### `ReverseTransactionRequest.java`
+
+Request DTO for `POST /transactions/{transactionId}/reverse`.
+
+Fields:
+
+- `reason`
+
+The transaction id comes from the URL path, and the idempotency key comes from the HTTP `Idempotency-Key` header.
 
 ### `TransactionResponse.java`
 
@@ -503,6 +629,7 @@ Fields:
 - `currency`
 - `status`
 - `description`
+- `reversalOfTransactionId`
 
 ### `TransactionType.java`
 
@@ -542,6 +669,23 @@ Mapped to:
 ```text
 400 INVALID_TRANSACTION_REQUEST for malformed transaction input
 422 CURRENCY_MISMATCH for account/transaction currency mismatch
+```
+
+### `InvalidReversalRequestException.java`
+
+Thrown for invalid reversal input or invalid reversal state.
+
+Examples:
+
+- missing reversal reason
+- original transaction not found
+- original transaction is not `POSTED`
+- original transaction was already reversed
+
+Mapped to:
+
+```text
+400 INVALID_REVERSAL_REQUEST
 ```
 
 ### `AccountNotFoundException.java`
@@ -733,6 +877,38 @@ Richer system-account modeling is still future work.
 
 Those directions describe the user account entry. The settlement account receives the opposite direction.
 
+### Why Reversal Creates A New Transaction
+
+LedgerFlow reverses by adding a new offsetting transaction instead of deleting or mutating the original movement.
+
+That preserves the audit trail:
+
+```text
+original transaction happened
+reversal transaction happened later
+original transaction now has reversed_at
+reversal transaction points to original through reversal_of_transaction_id
+```
+
+This is closer to financial systems than deleting rows, because history remains explainable.
+
+### Why Reversal Uses Idempotency Too
+
+Reversal is also a money-moving command. If a client retries the same reversal request after a timeout, LedgerFlow must return the original reversal result instead of changing the balance twice.
+
+The reversal request hash uses:
+
+```text
+original transaction id + reversal reason
+```
+
+The same idempotency conflict rule applies:
+
+```text
+same key + same reversal payload      -> replay original reversal
+same key + different reversal payload -> 409 IDEMPOTENCY_CONFLICT
+```
+
 ## 10. Common Debugging Lessons
 
 ### Reused Idempotency Keys Return Old Results
@@ -780,6 +956,20 @@ For insufficient funds, LedgerFlow avoids that with:
 ```java
 @Transactional(noRollbackFor = InsufficientFundsException.class)
 ```
+
+### Reversal Retry Returns The Existing Reversal
+
+If a reversal request times out client-side, retry the exact same request with the same `Idempotency-Key`.
+
+Expected behavior:
+
+```text
+same reversal id
+same reversalOfTransactionId
+no additional balance change
+```
+
+If the reason or transaction id changes while reusing the same key, the API returns `409 IDEMPOTENCY_CONFLICT`.
 
 ## 11. Interview Questions and Answers
 
@@ -849,9 +1039,21 @@ For insufficient funds, LedgerFlow avoids that with:
 22. **Why does `submitTransaction` use `noRollbackFor`?**  
     Without it, Spring would roll back the saved `FAILED` row when `InsufficientFundsException` is thrown.
 
+23. **How does LedgerFlow reverse a transaction?**  
+    It creates a new offsetting `POSTED` transaction, writes balanced ledger entries, updates the account balance, and marks the original transaction with `reversed_at`.
+
+24. **Why not delete the original transaction during reversal?**  
+    Financial history must remain auditable. The original transaction and the reversal both stay visible.
+
+25. **How does reversal idempotency work?**  
+    The reversal endpoint uses the same `idempotency_keys` table. Same key and same payload replay the reversal; same key with different payload returns `409`.
+
+26. **What prevents double reversal?**  
+    The service rejects reversal when the original transaction already has `reversed_at`.
+
 ## 12. Checklist Before Moving On
 
-Before moving on to reversals or outbox, be able to explain:
+Before moving on to concurrency hardening or outbox, be able to explain:
 
 - [ ] Why `POST /transactions` requires authentication.
 - [ ] Why `GET /transactions` is scoped to the authenticated user.
@@ -872,3 +1074,7 @@ Before moving on to reversals or outbox, be able to explain:
 - [ ] What `TransactionFlowTest` proves.
 - [ ] How idempotent retries avoid double balance updates.
 - [ ] How balanced ledger entries preserve `total debits == total credits`.
+- [ ] Why reversal creates a new offsetting transaction.
+- [ ] How `reversalOfTransactionId` and `reversedAt` differ.
+- [ ] Why reversal also needs idempotency.
+- [ ] Why a double reversal is rejected.

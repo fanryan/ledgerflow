@@ -764,7 +764,7 @@ GET /accounts/{accountId}/ledger-entries
     `200 OK` with a list of `AccountResponse` objects for the current user.
 
 13. **What is not implemented yet for accounts?**  
-    Currency allow-listing, freezing, closing, richer system-account modeling, reversals, and concurrency hardening.
+    Currency allow-listing, account lifecycle endpoints for freezing/closing, richer system-account modeling, and concurrency hardening.
 
 14. **Why is account creation not allowed to set an opening balance?**  
     Balance changes go through transaction posting to keep account movement auditable.

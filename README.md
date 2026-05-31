@@ -97,6 +97,7 @@ flowchart LR
     Transactions -->|ownership check| AccountTable
     Transactions -->|POST /transactions| TransactionTable
     Transactions -->|GET /transactions| TransactionTable
+    Transactions -->|POST /transactions/:id/reverse| TransactionTable
     Transactions -->|balanced ledger entries| LedgerTable
     Transactions -->|balance update| AccountTable
 ```
@@ -182,6 +183,7 @@ Implemented:
 - `ledger_entries` table migration
 - `POST /transactions` authenticated transaction submission endpoint
 - `GET /transactions` authenticated transaction listing endpoint
+- `POST /transactions/{transactionId}/reverse` authenticated reversal endpoint
 - Idempotency lookup through `Idempotency-Key`, request hash, and stored response metadata
 - Duplicate idempotency key with a different payload returns `409`
 - Account ownership check before transaction creation
@@ -190,14 +192,18 @@ Implemented:
 - Transaction posting updates account balances
 - Successful transactions return `POSTED`
 - Deposit and withdrawal create balanced ledger entries
+- Frozen and closed accounts cannot submit transactions
 - USD settlement system account is seeded for offset entries
 - Insufficient funds returns `422`
 - Insufficient funds records a `FAILED` transaction row
 - Idempotent retries do not update balances twice
+- Transaction reversal creates an offsetting transaction and balanced ledger entries
+- Reversal requests require an idempotency key and reason
+- Reversal idempotent retries return the original reversal result
+- Reusing a reversal idempotency key with a different payload returns `409`
 
 Next:
 
-- Reversal support
 - Concurrency tests for simultaneous withdrawals
 
 ## Local Development
@@ -302,6 +308,18 @@ curl http://localhost:8080/transactions \
   -H "Authorization: Bearer <access_token>"
 ```
 
+Reverse a transaction:
+
+```bash
+curl -X POST http://localhost:8080/transactions/<transaction_id>/reverse \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Idempotency-Key: reverse-example-001" \
+  -d '{
+    "reason": "Customer requested reversal"
+  }'
+```
+
 Run tests:
 
 ```bash
@@ -323,8 +341,10 @@ gradle test
 ### Milestone 2
 
 - Transaction `FAILED` status on insufficient funds
-- Optimistic concurrency with server-side retry loop
+- Account-state transaction guards for frozen and closed accounts
 - Reversal support with compensating ledger entries
+- Idempotent reversal retries
+- Optimistic concurrency with server-side retry loop
 - Concurrent transaction tests
 
 ### Milestone 3

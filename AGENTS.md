@@ -37,6 +37,7 @@ Current implemented Spring Boot slice:
 - `ledger_entries` table
 - `POST /transactions`
 - `GET /transactions`
+- `POST /transactions/{transactionId}/reverse`
 - idempotency lookup through `Idempotency-Key`, request hash, and stored response metadata
 - duplicate idempotency key with a different payload returns `409`
 - transaction ownership and currency validation
@@ -44,12 +45,17 @@ Current implemented Spring Boot slice:
 - transaction posting updates account balances
 - successful transactions return `POSTED`
 - deposit and withdrawal create balanced ledger entries
+- frozen and closed accounts cannot submit transactions
 - USD settlement system account is seeded for offset entries
 - insufficient funds returns `422`
 - insufficient funds records a `FAILED` transaction row
 - idempotent retries must not update balances twice
+- transaction reversals create offsetting transactions and balanced ledger entries
+- reversal requests require an idempotency key and reason
+- idempotent reversal retries must return the existing reversal without changing balances twice
+- reusing a reversal idempotency key with a different payload returns `409`
 
-Planned scope includes richer system-account modeling, optimistic concurrency hardening, reversals, transactional outbox, Spring Kafka consumers, PayFlow event consumption, balance snapshots, reconciliation, and dead-letter replay.
+Planned scope includes richer system-account modeling, optimistic concurrency hardening, transactional outbox, Spring Kafka consumers, PayFlow event consumption, balance snapshots, reconciliation, and dead-letter replay.
 
 ## Architecture Rules
 
@@ -133,6 +139,9 @@ V<number>__description.sql
 - Ledger entries must be derived from accepted transaction commands and remain auditable.
 - Current ledger posting creates balanced entries between the user account and the seeded USD settlement system account.
 - Idempotent transaction retries must return the existing transaction without creating additional ledger entries or balance changes.
+- Transaction reversals must be modeled as new offsetting transactions, not deletes or destructive edits.
+- Reversal metadata lives on `transactions.reversal_of_transaction_id` and `transactions.reversed_at`.
+- Reversal idempotency must use the same `idempotency_keys` conflict rules as normal submissions.
 
 ## Security Rules
 
@@ -168,7 +177,8 @@ docker compose config
 - Auth tests should cover valid login, invalid login, token generation, and endpoint authorization.
 - Account tests should cover protected access, account creation, ownership from JWT subject, listing by current user, invalid request handling, and normalization.
 - Transaction tests should cover authentication, listing by current user, idempotency, ownership checks, validation, currency mismatch, balance updates, and insufficient funds.
-- Ledger posting tests should cover ledger entry creation, idempotent retry safety, balanced debits/credits, reversals, and concurrent transaction races.
+- Reversal tests should cover offsetting transaction creation, balance restoration, double-reversal rejection, required reason validation, and idempotency.
+- Ledger posting tests should cover ledger entry creation, idempotent retry safety, balanced debits/credits, and concurrent transaction races.
 
 ## Local Development Commands
 
@@ -264,6 +274,16 @@ curl http://localhost:8080/transactions \
   -H "Authorization: Bearer <access_token>"
 ```
 
+Reverse a transaction:
+
+```bash
+curl -X POST http://localhost:8080/transactions/<transaction_id>/reverse \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Idempotency-Key: reverse-example-001" \
+  -d '{"reason":"Customer requested reversal"}'
+```
+
 ## What Not To Do
 
 - Do not modify application code when asked only for planning, documentation, or explanation.
@@ -272,4 +292,4 @@ curl http://localhost:8080/transactions \
 - Do not make Kafka or caches the source of truth.
 - Do not make protected application endpoints public by default.
 - Do not store raw passwords, JWT secrets, or production credentials in source control.
-- Do not add reversals, outbox, Kafka consumers, or reconciliation code before the current milestone calls for it.
+- Do not add outbox, Kafka consumers, or reconciliation code before the current milestone calls for it.

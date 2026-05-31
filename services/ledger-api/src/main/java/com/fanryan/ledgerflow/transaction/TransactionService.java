@@ -14,6 +14,8 @@ import com.fanryan.ledgerflow.account.Account;
 import com.fanryan.ledgerflow.account.AccountNotFoundException;
 import com.fanryan.ledgerflow.account.AccountOwnershipException;
 import com.fanryan.ledgerflow.account.AccountRepository;
+import com.fanryan.ledgerflow.account.AccountStatus;
+import com.fanryan.ledgerflow.account.InvalidAccountStateException;
 import com.fanryan.ledgerflow.ledger.LedgerEntry;
 import com.fanryan.ledgerflow.ledger.LedgerEntryDirection;
 import com.fanryan.ledgerflow.ledger.LedgerEntryRepository;
@@ -112,6 +114,8 @@ public class TransactionService {
         if (!account.ownerUserId().equals(ownerUserId)) {
             throw new AccountOwnershipException();
         }
+
+        validateAccountCanTransact(account);
 
         String currency = normalizeCurrency(request.currency());
 
@@ -361,5 +365,21 @@ public class TransactionService {
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("Failed to serialize transaction response", exception);
         }
+    }
+
+    private void validateAccountCanTransact(Account account) {
+        if (account.status() == AccountStatus.ACTIVE) {
+            return;
+        }
+
+        if (account.status() == AccountStatus.FROZEN) {
+            throw new InvalidAccountStateException("Frozen accounts cannot submit transactions");
+        }
+
+        if (account.status() == AccountStatus.CLOSED) {
+            throw new InvalidAccountStateException("Closed accounts cannot submit transactions");
+        }
+
+        throw new InvalidAccountStateException("Account status does not allow transactions");
     }
 }

@@ -1,14 +1,20 @@
 package com.fanryan.ledgerflow.transaction;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
+import com.fanryan.ledgerflow.account.Account;
+import com.fanryan.ledgerflow.account.AccountRepository;
+import com.fanryan.ledgerflow.account.AccountStatus;
+import com.fanryan.ledgerflow.ledger.LedgerEntry;
+import com.fanryan.ledgerflow.ledger.LedgerEntryDirection;
+import com.fanryan.ledgerflow.ledger.LedgerEntryRepository;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -17,10 +23,6 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
-
-import com.fanryan.ledgerflow.ledger.LedgerEntry;
-import com.fanryan.ledgerflow.ledger.LedgerEntryDirection;
-import com.fanryan.ledgerflow.ledger.LedgerEntryRepository;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -34,6 +36,9 @@ class TransactionFlowTest {
 
     @Autowired
     private LedgerEntryRepository ledgerEntryRepository;
+
+    @Autowired
+    private AccountRepository accountRepository;
 
     @Test
     void submitTransactionRequiresAuthentication() throws Exception {
@@ -130,7 +135,7 @@ class TransactionFlowTest {
                                   "currency": "USD",
                                   "description": "Different deposit"
                                 }
-                """.formatted(accountId)))
+                                """.formatted(accountId)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.errorCode").value("IDEMPOTENCY_CONFLICT"))
                 .andExpect(jsonPath("$.message").value("Idempotency key was already used with a different request payload"));
@@ -158,7 +163,7 @@ class TransactionFlowTest {
                                   "currency": "USD",
                                   "description": "Invalid amount"
                                 }
-                """.formatted(accountId)))
+                                """.formatted(accountId)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorCode").value("INVALID_TRANSACTION_REQUEST"))
                 .andExpect(jsonPath("$.message").value("Amount must be greater than zero"));
@@ -181,7 +186,7 @@ class TransactionFlowTest {
                                   "currency": "SGD",
                                   "description": "Wrong currency"
                                 }
-                """.formatted(accountId)))
+                                """.formatted(accountId)))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.errorCode").value("CURRENCY_MISMATCH"))
                 .andExpect(jsonPath("$.message").value("Currency must match account currency"));
@@ -301,13 +306,13 @@ class TransactionFlowTest {
                         .header("Idempotency-Key", "tx-insufficient-" + UUID.randomUUID())
                         .content("""
                                 {
-                                "accountId": "%s",
-                                "type": "WITHDRAWAL",
-                                "amountMinor": 1000,
-                                "currency": "USD",
-                                "description": "Too much"
+                                  "accountId": "%s",
+                                  "type": "WITHDRAWAL",
+                                  "amountMinor": 1000,
+                                  "currency": "USD",
+                                  "description": "Too much"
                                 }
-                """.formatted(accountId)))
+                                """.formatted(accountId)))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.errorCode").value("INSUFFICIENT_FUNDS"))
                 .andExpect(jsonPath("$.message").value("Insufficient funds"));
@@ -331,7 +336,7 @@ class TransactionFlowTest {
                                   "currency": "USD",
                                   "description": "Too much"
                                 }
-                """.formatted(accountId)))
+                                """.formatted(accountId)))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.errorCode").value("INSUFFICIENT_FUNDS"))
                 .andExpect(jsonPath("$.message").value("Insufficient funds"));
@@ -342,6 +347,56 @@ class TransactionFlowTest {
                 .andExpect(jsonPath("$[?(@.idempotencyKey == '%s')].status".formatted(idempotencyKey)).value("FAILED"))
                 .andExpect(jsonPath("$[?(@.idempotencyKey == '%s')].type".formatted(idempotencyKey)).value("WITHDRAWAL"))
                 .andExpect(jsonPath("$[?(@.idempotencyKey == '%s')].amountMinor".formatted(idempotencyKey)).value(1000));
+    }
+
+    @Test
+    void frozenAccountCannotSubmitTransaction() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+
+        updateAccountStatus(accountId, AccountStatus.FROZEN);
+
+        mockMvc.perform(post("/transactions")
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .header("Idempotency-Key", "tx-frozen-" + UUID.randomUUID())
+                        .content("""
+                                {
+                                  "accountId": "%s",
+                                  "type": "DEPOSIT",
+                                  "amountMinor": 1000,
+                                  "currency": "USD",
+                                  "description": "Frozen account deposit"
+                                }
+                                """.formatted(accountId)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_ACCOUNT_STATE"))
+                .andExpect(jsonPath("$.message").value("Frozen accounts cannot submit transactions"));
+    }
+
+    @Test
+    void closedAccountCannotSubmitTransaction() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+
+        updateAccountStatus(accountId, AccountStatus.CLOSED);
+
+        mockMvc.perform(post("/transactions")
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .header("Idempotency-Key", "tx-closed-" + UUID.randomUUID())
+                        .content("""
+                                {
+                                  "accountId": "%s",
+                                  "type": "DEPOSIT",
+                                  "amountMinor": 1000,
+                                  "currency": "USD",
+                                  "description": "Closed account deposit"
+                                }
+                                """.formatted(accountId)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_ACCOUNT_STATE"))
+                .andExpect(jsonPath("$.message").value("Closed accounts cannot submit transactions"));
     }
 
     @Test
@@ -489,16 +544,36 @@ class TransactionFlowTest {
                         .header("Idempotency-Key", idempotencyKey)
                         .content("""
                                 {
-                                "accountId": "%s",
-                                "type": "WITHDRAWAL",
-                                "amountMinor": %d,
-                                "currency": "USD",
-                                "description": "Test withdrawal"
+                                  "accountId": "%s",
+                                  "type": "WITHDRAWAL",
+                                  "amountMinor": %d,
+                                  "currency": "USD",
+                                  "description": "Test withdrawal"
                                 }
                                 """.formatted(accountId, amountMinor)))
                 .andExpect(status().isCreated())
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
+    }
+
+    private void updateAccountStatus(String accountId, AccountStatus status) {
+        Account account = accountRepository.findById(UUID.fromString(accountId))
+                .orElseThrow();
+
+        OffsetDateTime now = OffsetDateTime.now();
+
+        Account updatedAccount = new Account(
+                account.id(),
+                account.ownerUserId(),
+                account.currency(),
+                status,
+                account.balanceMinor(),
+                account.version(),
+                account.createdAt(),
+                now
+        );
+
+        accountRepository.save(updatedAccount);
     }
 }

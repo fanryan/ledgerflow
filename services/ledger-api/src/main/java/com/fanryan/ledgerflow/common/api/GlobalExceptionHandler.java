@@ -3,11 +3,12 @@ package com.fanryan.ledgerflow.common.api;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+import com.fanryan.ledgerflow.account.AccountNotFoundException;
+import com.fanryan.ledgerflow.account.AccountOwnershipException;
+import com.fanryan.ledgerflow.account.InvalidAccountStateException;
 import com.fanryan.ledgerflow.account.InvalidAccountRequestException;
 import com.fanryan.ledgerflow.auth.InvalidCredentialsException;
 import com.fanryan.ledgerflow.auth.InvalidTokenException;
-import com.fanryan.ledgerflow.account.AccountNotFoundException;
-import com.fanryan.ledgerflow.account.AccountOwnershipException;
 import com.fanryan.ledgerflow.transaction.CurrencyMismatchException;
 import com.fanryan.ledgerflow.transaction.ExpiredIdempotencyKeyException;
 import com.fanryan.ledgerflow.transaction.IdempotencyConflictException;
@@ -142,6 +143,20 @@ public class GlobalExceptionHandler {
     ) {
         return new ErrorResponse(
                 "ACCOUNT_FORBIDDEN",
+                exception.getMessage(),
+                UUID.randomUUID().toString(),
+                OffsetDateTime.now()
+        );
+    }
+
+    @ResponseStatus(HttpStatus.CONFLICT)
+    @ExceptionHandler(InvalidAccountStateException.class)
+    public ErrorResponse handleInvalidAccountState(
+            InvalidAccountStateException exception,
+            WebRequest request
+    ) {
+        return new ErrorResponse(
+                "INVALID_ACCOUNT_STATE",
                 exception.getMessage(),
                 UUID.randomUUID().toString(),
                 OffsetDateTime.now()

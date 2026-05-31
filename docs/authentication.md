@@ -252,9 +252,9 @@ with:
 
 ```json
 {
-  "error_code": "INVALID_CREDENTIALS",
+  "errorCode": "INVALID_CREDENTIALS",
   "message": "Invalid email or password",
-  "request_id": "...",
+  "requestId": "...",
   "timestamp": "..."
 }
 ```
@@ -337,9 +337,9 @@ with:
 
 ```json
 {
-  "error_code": "INVALID_TOKEN",
+  "errorCode": "INVALID_TOKEN",
   "message": "Invalid or expired token",
-  "request_id": "...",
+  "requestId": "...",
   "timestamp": "..."
 }
 ```
@@ -618,12 +618,12 @@ Standard error response DTO.
 
 Current fields:
 
-- `error_code`
+- `errorCode`
 - `message`
-- `request_id`
+- `requestId`
 - `timestamp`
 
-This repo uses snake_case JSON fields for error responses to match the PRD contract.
+This repo uses camelCase JSON fields for error responses.
 
 ### `GlobalExceptionHandler.java`
 

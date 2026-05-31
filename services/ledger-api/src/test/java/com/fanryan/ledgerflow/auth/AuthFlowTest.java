@@ -49,9 +49,9 @@ class AuthFlowTest {
                                   "email": "admin@ledgerflow.local",
                                   "password": "wrong"
                                 }
-                                """))
+                """))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.error_code").value("INVALID_CREDENTIALS"))
+                .andExpect(jsonPath("$.errorCode").value("INVALID_CREDENTIALS"))
                 .andExpect(jsonPath("$.message").value("Invalid email or password"));
     }
 
@@ -93,9 +93,9 @@ class AuthFlowTest {
                                 {
                                   "refreshToken": "bad-token"
                                 }
-                                """))
+                """))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.error_code").value("INVALID_TOKEN"));
+                .andExpect(jsonPath("$.errorCode").value("INVALID_TOKEN"));
     }
 
     @Test

@@ -34,7 +34,7 @@ public class SecurityConfig {
                             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
                             response.getWriter().write("""
-                                    {"error_code":"UNAUTHORIZED","message":"Missing or invalid JWT","request_id":"%s","timestamp":"%s"}
+                                    {"errorCode":"UNAUTHORIZED","message":"Missing or invalid JWT","requestId":"%s","timestamp":"%s"}
                                     """.formatted(
                                     UUID.randomUUID(),
                                     OffsetDateTime.now()

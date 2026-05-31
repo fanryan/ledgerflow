@@ -114,9 +114,9 @@ class AccountFlowTest {
                                 {
                                 "currency": "USDD"
                                 }
-                                """))
+                """))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error_code").value("INVALID_ACCOUNT_REQUEST"))
+                .andExpect(jsonPath("$.errorCode").value("INVALID_ACCOUNT_REQUEST"))
                 .andExpect(jsonPath("$.message").value("Currency must be a 3-letter code"));
     }
 

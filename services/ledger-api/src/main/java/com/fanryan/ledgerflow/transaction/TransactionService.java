@@ -168,7 +168,7 @@ public class TransactionService {
                     failedTransaction.id(),
                     failedTransaction.status().name(),
                     """
-                            {"error_code":"INSUFFICIENT_FUNDS","message":"Insufficient funds"}
+                            {"errorCode":"INSUFFICIENT_FUNDS","message":"Insufficient funds"}
                             """
             );
 

@@ -85,7 +85,7 @@ docker-compose.yml         Local infrastructure entrypoint
 - Keep configuration in `src/main/resources/application.yml` unless a secret should come from the environment.
 - Do not add JPA/Hibernate unless the project deliberately changes away from Spring Data JDBC.
 - Use a global `@ControllerAdvice` for HTTP exception handling.
-- Map API errors to the current standard error response shape: `error_code`, `message`, `request_id`, and `timestamp`.
+- Map API errors to the current standard error response shape: `errorCode`, `message`, `requestId`, and `timestamp`.
 
 Useful commands:
 

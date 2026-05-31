@@ -2,14 +2,14 @@ package com.fanryan.ledgerflow.transaction;
 
 import java.time.OffsetDateTime;
 import java.util.UUID;
-
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.Version;
 import org.springframework.data.relational.core.mapping.Table;
 
 @Table("transactions")
 public record Transaction(
-        @Id UUID id,
+        @Id
+        UUID id,
         UUID accountId,
         UUID ownerUserId,
         String idempotencyKey,
@@ -18,7 +18,10 @@ public record Transaction(
         String currency,
         TransactionStatus status,
         String description,
-        @Version long version,
+        UUID reversalOfTransactionId,
+        OffsetDateTime reversedAt,
+        @Version
+        long version,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt
 ) {

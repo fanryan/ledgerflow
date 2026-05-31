@@ -13,6 +13,7 @@ import com.fanryan.ledgerflow.transaction.CurrencyMismatchException;
 import com.fanryan.ledgerflow.transaction.ExpiredIdempotencyKeyException;
 import com.fanryan.ledgerflow.transaction.IdempotencyConflictException;
 import com.fanryan.ledgerflow.transaction.InvalidTransactionRequestException;
+import com.fanryan.ledgerflow.transaction.InvalidReversalRequestException;
 import com.fanryan.ledgerflow.transaction.InsufficientFundsException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -73,6 +74,20 @@ public class GlobalExceptionHandler {
     ) {
         return new ErrorResponse(
                 "INVALID_TRANSACTION_REQUEST",
+                exception.getMessage(),
+                UUID.randomUUID().toString(),
+                OffsetDateTime.now()
+        );
+    }
+
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(InvalidReversalRequestException.class)
+    public ErrorResponse handleInvalidReversalRequest(
+            InvalidReversalRequestException exception,
+            WebRequest request
+    ) {
+        return new ErrorResponse(
+                "INVALID_REVERSAL_REQUEST",
                 exception.getMessage(),
                 UUID.randomUUID().toString(),
                 OffsetDateTime.now()

@@ -11,8 +11,10 @@ public record TransactionResponse(
         long amountMinor,
         String currency,
         TransactionStatus status,
-        String description
+        String description,
+        UUID reversalOfTransactionId
 ) {
+
     public static TransactionResponse from(Transaction transaction) {
         return new TransactionResponse(
                 transaction.id(),
@@ -23,7 +25,8 @@ public record TransactionResponse(
                 transaction.amountMinor(),
                 transaction.currency(),
                 transaction.status(),
-                transaction.description()
+                transaction.description(),
+                transaction.reversalOfTransactionId()
         );
     }
 }

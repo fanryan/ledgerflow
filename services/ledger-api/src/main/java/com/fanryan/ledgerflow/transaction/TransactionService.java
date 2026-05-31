@@ -3,8 +3,8 @@ package com.fanryan.ledgerflow.transaction;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.List;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -135,6 +135,8 @@ public class TransactionService {
                 currency,
                 TransactionStatus.PENDING,
                 request.description(),
+                null,
+                null,
                 0,
                 now,
                 now
@@ -142,7 +144,7 @@ public class TransactionService {
 
         Transaction savedPendingTransaction = transactionRepository.save(pendingTransaction);
 
-        Long newBalanceMinor = calculateNewBalanceOrNull(
+        Long newBalanceMinor = calculateNewBalanceMinorOrNull(
                 account.balanceMinor(),
                 request.type(),
                 request.amountMinor()
@@ -159,6 +161,8 @@ public class TransactionService {
                     savedPendingTransaction.currency(),
                     TransactionStatus.FAILED,
                     savedPendingTransaction.description(),
+                    savedPendingTransaction.reversalOfTransactionId(),
+                    savedPendingTransaction.reversedAt(),
                     savedPendingTransaction.version(),
                     savedPendingTransaction.createdAt(),
                     now
@@ -217,6 +221,8 @@ public class TransactionService {
                 savedPendingTransaction.currency(),
                 TransactionStatus.POSTED,
                 savedPendingTransaction.description(),
+                savedPendingTransaction.reversalOfTransactionId(),
+                savedPendingTransaction.reversedAt(),
                 savedPendingTransaction.version(),
                 savedPendingTransaction.createdAt(),
                 now
@@ -237,7 +243,161 @@ public class TransactionService {
         return response;
     }
 
-    private Long calculateNewBalanceOrNull(
+    @Transactional
+    public TransactionResponse reverseTransaction(
+            UUID ownerUserId,
+            UUID transactionId,
+            String idempotencyKey,
+            ReverseTransactionRequest request
+    ) {
+        String normalizedIdempotencyKey = normalizeIdempotencyKey(idempotencyKey);
+        validateReversalRequest(request);
+        String requestHash = hashReversalRequest(transactionId, request);
+
+        return idempotencyRepository.findByKey(normalizedIdempotencyKey)
+                .map(record -> replayOrRejectIdempotentRequest(record, ownerUserId, requestHash))
+                .orElseGet(() -> createAndPostReversal(
+                        ownerUserId,
+                        transactionId,
+                        normalizedIdempotencyKey,
+                        requestHash,
+                        request
+                ));
+    }
+
+    private TransactionResponse createAndPostReversal(
+            UUID ownerUserId,
+            UUID transactionId,
+            String idempotencyKey,
+            String requestHash,
+            ReverseTransactionRequest request
+    ) {
+        Transaction originalTransaction = transactionRepository.findById(transactionId)
+                .orElseThrow(() -> new InvalidReversalRequestException("Original transaction was not found"));
+
+        if (!originalTransaction.ownerUserId().equals(ownerUserId)) {
+            throw new AccountOwnershipException();
+        }
+
+        if (originalTransaction.status() != TransactionStatus.POSTED) {
+            throw new InvalidReversalRequestException("Only posted transactions can be reversed");
+        }
+
+        if (originalTransaction.reversedAt() != null) {
+            throw new InvalidReversalRequestException("Transaction has already been reversed");
+        }
+
+        Account account = accountRepository.findById(originalTransaction.accountId())
+                .orElseThrow(AccountNotFoundException::new);
+
+        validateAccountCanTransact(account);
+
+        OffsetDateTime now = OffsetDateTime.now();
+
+        Transaction reversalTransaction = new Transaction(
+                UUID.randomUUID(),
+                originalTransaction.accountId(),
+                ownerUserId,
+                idempotencyKey,
+                reversalTypeFor(originalTransaction.type()),
+                originalTransaction.amountMinor(),
+                originalTransaction.currency(),
+                TransactionStatus.POSTED,
+                request.reason(),
+                originalTransaction.id(),
+                null,
+                0,
+                now,
+                now
+        );
+
+        Long newBalanceMinor = calculateNewBalanceMinorOrNull(
+                account.balanceMinor(),
+                reversalTransaction.type(),
+                reversalTransaction.amountMinor()
+        );
+
+        if (newBalanceMinor == null) {
+            throw new InsufficientFundsException();
+        }
+
+        Transaction savedReversalTransaction = transactionRepository.save(reversalTransaction);
+
+        LedgerEntry userLedgerEntry = new LedgerEntry(
+                UUID.randomUUID(),
+                savedReversalTransaction.id(),
+                account.id(),
+                userLedgerEntryDirectionFor(savedReversalTransaction.type()),
+                savedReversalTransaction.amountMinor(),
+                savedReversalTransaction.currency(),
+                0,
+                now
+        );
+
+        LedgerEntry systemLedgerEntry = new LedgerEntry(
+                UUID.randomUUID(),
+                savedReversalTransaction.id(),
+                SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID,
+                systemLedgerEntryDirectionFor(savedReversalTransaction.type()),
+                savedReversalTransaction.amountMinor(),
+                savedReversalTransaction.currency(),
+                0,
+                now
+        );
+
+        ledgerEntryRepository.save(userLedgerEntry);
+        ledgerEntryRepository.save(systemLedgerEntry);
+
+        Account updatedAccount = account.withBalance(newBalanceMinor, now);
+        accountRepository.save(updatedAccount);
+
+        Transaction reversedOriginalTransaction = new Transaction(
+                originalTransaction.id(),
+                originalTransaction.accountId(),
+                originalTransaction.ownerUserId(),
+                originalTransaction.idempotencyKey(),
+                originalTransaction.type(),
+                originalTransaction.amountMinor(),
+                originalTransaction.currency(),
+                originalTransaction.status(),
+                originalTransaction.description(),
+                originalTransaction.reversalOfTransactionId(),
+                now,
+                originalTransaction.version(),
+                originalTransaction.createdAt(),
+                now
+        );
+
+        transactionRepository.save(reversedOriginalTransaction);
+
+        TransactionResponse response = TransactionResponse.from(savedReversalTransaction);
+
+        saveIdempotencyRecord(
+                idempotencyKey,
+                ownerUserId,
+                requestHash,
+                savedReversalTransaction.id(),
+                savedReversalTransaction.status().name(),
+                toJson(response)
+        );
+
+        return response;
+    }
+
+    private void validateReversalRequest(ReverseTransactionRequest request) {
+        if (request == null || request.reason() == null || request.reason().isBlank()) {
+            throw new InvalidReversalRequestException("Reversal reason is required");
+        }
+    }
+
+    private TransactionType reversalTypeFor(TransactionType originalType) {
+        return switch (originalType) {
+            case DEPOSIT -> TransactionType.WITHDRAWAL;
+            case WITHDRAWAL -> TransactionType.DEPOSIT;
+        };
+    }
+
+    private Long calculateNewBalanceMinorOrNull(
             long currentBalanceMinor,
             TransactionType type,
             long amountMinor
@@ -322,6 +482,29 @@ public class TransactionService {
                 String.valueOf(request.amountMinor()),
                 normalizedCurrency,
                 request.description() == null ? "" : request.description()
+        );
+
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hashBytes = digest.digest(canonicalRequest.getBytes(StandardCharsets.UTF_8));
+
+            StringBuilder hash = new StringBuilder();
+
+            for (byte hashByte : hashBytes) {
+                hash.append("%02x".formatted(hashByte));
+            }
+
+            return hash.toString();
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is not available", exception);
+        }
+    }
+
+    private String hashReversalRequest(UUID transactionId, ReverseTransactionRequest request) {
+        String canonicalRequest = String.join(
+                "|",
+                String.valueOf(transactionId),
+                request.reason() == null ? "" : request.reason()
         );
 
         try {

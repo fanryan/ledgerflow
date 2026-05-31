@@ -532,6 +532,195 @@ class TransactionFlowTest {
         assertThat(containsCreatedTransaction).isTrue();
     }
 
+    @Test
+    void reverseDepositCreatesOffsettingTransactionAndRestoresBalance() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+
+        String depositResponse = submitDeposit(
+                accessToken,
+                accountId,
+                "tx-reverse-deposit-original-" + UUID.randomUUID()
+        );
+
+        String originalTransactionId = objectMapper
+                .readTree(depositResponse)
+                .get("id")
+                .asText();
+
+        mockMvc.perform(post("/transactions/{transactionId}/reverse", originalTransactionId)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .header("Idempotency-Key", "tx-reverse-deposit-" + UUID.randomUUID())
+                        .content("""
+                                {
+                                  "reason": "Customer requested reversal"
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.accountId").value(accountId))
+                .andExpect(jsonPath("$.type").value("WITHDRAWAL"))
+                .andExpect(jsonPath("$.amountMinor").value(1000))
+                .andExpect(jsonPath("$.currency").value("USD"))
+                .andExpect(jsonPath("$.status").value("POSTED"))
+                .andExpect(jsonPath("$.reversalOfTransactionId").value(originalTransactionId));
+
+        mockMvc.perform(get("/accounts")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == '%s')].balanceMinor".formatted(accountId)).value(0));
+    }
+
+    @Test
+    void cannotReverseSameTransactionTwice() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+
+        String depositResponse = submitDeposit(
+                accessToken,
+                accountId,
+                "tx-double-reverse-original-" + UUID.randomUUID()
+        );
+
+        String originalTransactionId = objectMapper
+                .readTree(depositResponse)
+                .get("id")
+                .asText();
+
+        reverseTransaction(
+                accessToken,
+                originalTransactionId,
+                "tx-double-reverse-first-" + UUID.randomUUID()
+        );
+
+        mockMvc.perform(post("/transactions/{transactionId}/reverse", originalTransactionId)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .header("Idempotency-Key", "tx-double-reverse-second-" + UUID.randomUUID())
+                        .content("""
+                                {
+                                  "reason": "Duplicate reversal attempt"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REVERSAL_REQUEST"))
+                .andExpect(jsonPath("$.message").value("Transaction has already been reversed"));
+    }
+
+    @Test
+    void reversalRequiresReason() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+
+        String depositResponse = submitDeposit(
+                accessToken,
+                accountId,
+                "tx-reverse-no-reason-original-" + UUID.randomUUID()
+        );
+
+        String originalTransactionId = objectMapper
+                .readTree(depositResponse)
+                .get("id")
+                .asText();
+
+        mockMvc.perform(post("/transactions/{transactionId}/reverse", originalTransactionId)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .header("Idempotency-Key", "tx-reverse-no-reason-" + UUID.randomUUID())
+                        .content("""
+                                {
+                                  "reason": ""
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REVERSAL_REQUEST"))
+                .andExpect(jsonPath("$.message").value("Reversal reason is required"));
+    }
+
+    @Test
+    void repeatedReversalIdempotencyKeyReturnsSameReversalTransaction() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+        String reversalIdempotencyKey = "tx-reverse-repeat-" + UUID.randomUUID();
+
+        String depositResponse = submitDeposit(
+                accessToken,
+                accountId,
+                "tx-reverse-repeat-original-" + UUID.randomUUID()
+        );
+
+        String originalTransactionId = objectMapper
+                .readTree(depositResponse)
+                .get("id")
+                .asText();
+
+        String firstReversalResponse = reverseTransaction(
+                accessToken,
+                originalTransactionId,
+                reversalIdempotencyKey
+        );
+
+        String secondReversalResponse = reverseTransaction(
+                accessToken,
+                originalTransactionId,
+                reversalIdempotencyKey
+        );
+
+        String firstReversalId = objectMapper
+                .readTree(firstReversalResponse)
+                .get("id")
+                .asText();
+
+        String secondReversalId = objectMapper
+                .readTree(secondReversalResponse)
+                .get("id")
+                .asText();
+
+        assertThat(secondReversalId).isEqualTo(firstReversalId);
+
+        mockMvc.perform(get("/accounts")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == '%s')].balanceMinor".formatted(accountId)).value(0));
+    }
+
+    @Test
+    void repeatedReversalIdempotencyKeyWithDifferentPayloadReturnsConflict() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+        String reversalIdempotencyKey = "tx-reverse-conflict-" + UUID.randomUUID();
+
+        String depositResponse = submitDeposit(
+                accessToken,
+                accountId,
+                "tx-reverse-conflict-original-" + UUID.randomUUID()
+        );
+
+        String originalTransactionId = objectMapper
+                .readTree(depositResponse)
+                .get("id")
+                .asText();
+
+        reverseTransaction(
+                accessToken,
+                originalTransactionId,
+                reversalIdempotencyKey
+        );
+
+        mockMvc.perform(post("/transactions/{transactionId}/reverse", originalTransactionId)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .header("Idempotency-Key", reversalIdempotencyKey)
+                        .content("""
+                                {
+                                  "reason": "Different reversal reason"
+                                }
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("IDEMPOTENCY_CONFLICT"))
+                .andExpect(jsonPath("$.message").value("Idempotency key was already used with a different request payload"));
+    }
+
     private String submitWithdrawal(
             String accessToken,
             String accountId,
@@ -551,6 +740,26 @@ class TransactionFlowTest {
                                   "description": "Test withdrawal"
                                 }
                                 """.formatted(accountId, amountMinor)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+    }
+
+    private String reverseTransaction(
+            String accessToken,
+            String transactionId,
+            String idempotencyKey
+    ) throws Exception {
+        return mockMvc.perform(post("/transactions/{transactionId}/reverse", transactionId)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .header("Idempotency-Key", idempotencyKey)
+                        .content("""
+                                {
+                                  "reason": "Test reversal"
+                                }
+                                """))
                 .andExpect(status().isCreated())
                 .andReturn()
                 .getResponse()

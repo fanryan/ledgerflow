@@ -14,6 +14,9 @@ import com.fanryan.ledgerflow.account.AccountStatus;
 import com.fanryan.ledgerflow.ledger.LedgerEntry;
 import com.fanryan.ledgerflow.ledger.LedgerEntryDirection;
 import com.fanryan.ledgerflow.ledger.LedgerEntryRepository;
+import com.fanryan.ledgerflow.outbox.OutboxEvent;
+import com.fanryan.ledgerflow.outbox.OutboxEventRepository;
+import com.fanryan.ledgerflow.outbox.OutboxEventStatus;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -39,6 +42,9 @@ class TransactionFlowTest {
 
     @Autowired
     private AccountRepository accountRepository;
+
+    @Autowired
+    private OutboxEventRepository outboxEventRepository;
 
     @Test
     void submitTransactionRequiresAuthentication() throws Exception {
@@ -490,6 +496,35 @@ class TransactionFlowTest {
 
         assertThat(totalDebits).isEqualTo(400);
         assertThat(totalCredits).isEqualTo(400);
+    }
+
+    @Test
+    void postedTransactionCreatesPendingOutboxEvent() throws Exception {
+        String accessToken = loginAndGetAccessToken();
+        String accountId = createAccountAndGetId(accessToken, "USD");
+
+        String response = submitDeposit(
+                accessToken,
+                accountId,
+                "tx-outbox-posted-" + UUID.randomUUID()
+        );
+
+        UUID transactionId = UUID.fromString(objectMapper.readTree(response).get("id").asText());
+
+        List<OutboxEvent> events = outboxEventRepository.findByAggregateId(transactionId);
+
+        assertThat(events).hasSize(1);
+
+        OutboxEvent event = events.get(0);
+
+        assertThat(event.aggregateType()).isEqualTo("TRANSACTION");
+        assertThat(event.aggregateId()).isEqualTo(transactionId);
+        assertThat(event.eventType()).isEqualTo("TRANSACTION_POSTED");
+        assertThat(event.status()).isEqualTo(OutboxEventStatus.PENDING);
+
+        JsonNode payload = objectMapper.readTree(event.payload());
+
+        assertThat(payload.get("transactionId").asText()).isEqualTo(transactionId.toString());
     }
 
     @Test

@@ -9,6 +9,7 @@ import com.fanryan.ledgerflow.account.InvalidAccountStateException;
 import com.fanryan.ledgerflow.account.InvalidAccountRequestException;
 import com.fanryan.ledgerflow.auth.InvalidCredentialsException;
 import com.fanryan.ledgerflow.auth.InvalidTokenException;
+import com.fanryan.ledgerflow.transaction.ConcurrentTransactionException;
 import com.fanryan.ledgerflow.transaction.CurrencyMismatchException;
 import com.fanryan.ledgerflow.transaction.ExpiredIdempotencyKeyException;
 import com.fanryan.ledgerflow.transaction.IdempotencyConflictException;
@@ -116,6 +117,20 @@ public class GlobalExceptionHandler {
     ) {
         return new ErrorResponse(
                 "IDEMPOTENCY_CONFLICT",
+                exception.getMessage(),
+                UUID.randomUUID().toString(),
+                OffsetDateTime.now()
+        );
+    }
+
+    @ResponseStatus(HttpStatus.CONFLICT)
+    @ExceptionHandler(ConcurrentTransactionException.class)
+    public ErrorResponse handleConcurrentTransaction(
+            ConcurrentTransactionException exception,
+            WebRequest request
+    ) {
+        return new ErrorResponse(
+                "CONCURRENT_TRANSACTION_CONFLICT",
                 exception.getMessage(),
                 UUID.randomUUID().toString(),
                 OffsetDateTime.now()

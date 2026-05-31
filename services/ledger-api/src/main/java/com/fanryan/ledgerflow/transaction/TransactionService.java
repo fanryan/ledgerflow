@@ -22,6 +22,7 @@ import com.fanryan.ledgerflow.ledger.LedgerEntryRepository;
 import com.fanryan.ledgerflow.ledger.SystemAccounts;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 @Service
 public class TransactionService {
@@ -208,8 +209,7 @@ public class TransactionService {
         ledgerEntryRepository.save(userLedgerEntry);
         ledgerEntryRepository.save(systemLedgerEntry);
 
-        Account updatedAccount = account.withBalance(newBalanceMinor, now);
-        accountRepository.save(updatedAccount);
+        saveAccountBalance(account, newBalanceMinor, now);
 
         Transaction postedTransaction = new Transaction(
                 savedPendingTransaction.id(),
@@ -348,8 +348,7 @@ public class TransactionService {
         ledgerEntryRepository.save(userLedgerEntry);
         ledgerEntryRepository.save(systemLedgerEntry);
 
-        Account updatedAccount = account.withBalance(newBalanceMinor, now);
-        accountRepository.save(updatedAccount);
+        saveAccountBalance(account, newBalanceMinor, now);
 
         Transaction reversedOriginalTransaction = new Transaction(
                 originalTransaction.id(),
@@ -564,5 +563,18 @@ public class TransactionService {
         }
 
         throw new InvalidAccountStateException("Account status does not allow transactions");
+    }
+
+    private void saveAccountBalance(
+            Account account,
+            long newBalanceMinor,
+            OffsetDateTime now
+    ) {
+        try {
+            Account updatedAccount = account.withBalance(newBalanceMinor, now);
+            accountRepository.save(updatedAccount);
+        } catch (OptimisticLockingFailureException exception) {
+            throw new ConcurrentTransactionException();
+        }
     }
 }

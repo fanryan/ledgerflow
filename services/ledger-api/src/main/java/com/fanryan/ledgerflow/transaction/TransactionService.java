@@ -20,6 +20,7 @@ import com.fanryan.ledgerflow.ledger.LedgerEntry;
 import com.fanryan.ledgerflow.ledger.LedgerEntryDirection;
 import com.fanryan.ledgerflow.ledger.LedgerEntryRepository;
 import com.fanryan.ledgerflow.ledger.SystemAccounts;
+import com.fanryan.ledgerflow.outbox.OutboxService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -32,19 +33,22 @@ public class TransactionService {
     private final LedgerEntryRepository ledgerEntryRepository;
     private final IdempotencyRepository idempotencyRepository;
     private final ObjectMapper objectMapper;
+    private final OutboxService outboxService;
 
     public TransactionService(
             TransactionRepository transactionRepository,
             AccountRepository accountRepository,
             LedgerEntryRepository ledgerEntryRepository,
             IdempotencyRepository idempotencyRepository,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            OutboxService outboxService
     ) {
         this.transactionRepository = transactionRepository;
         this.accountRepository = accountRepository;
         this.ledgerEntryRepository = ledgerEntryRepository;
         this.idempotencyRepository = idempotencyRepository;
         this.objectMapper = objectMapper;
+        this.outboxService = outboxService;
     }
 
     @Transactional(noRollbackFor = InsufficientFundsException.class)
@@ -230,6 +234,7 @@ public class TransactionService {
 
         Transaction savedPostedTransaction = transactionRepository.save(postedTransaction);
         TransactionResponse response = TransactionResponse.from(savedPostedTransaction);
+        saveTransactionPostedOutboxEvent(savedPostedTransaction);
 
         saveIdempotencyRecord(
                 idempotencyKey,
@@ -370,6 +375,7 @@ public class TransactionService {
         transactionRepository.save(reversedOriginalTransaction);
 
         TransactionResponse response = TransactionResponse.from(savedReversalTransaction);
+        saveTransactionPostedOutboxEvent(savedReversalTransaction);
 
         saveIdempotencyRecord(
                 idempotencyKey,
@@ -381,6 +387,15 @@ public class TransactionService {
         );
 
         return response;
+    }
+
+    private void saveTransactionPostedOutboxEvent(Transaction transaction) {
+        outboxService.savePendingEvent(
+                "TRANSACTION",
+                transaction.id(),
+                "TRANSACTION_POSTED",
+                toJson(TransactionPostedEventPayload.from(transaction))
+        );
     }
 
     private void validateReversalRequest(ReverseTransactionRequest request) {
@@ -541,11 +556,11 @@ public class TransactionService {
         ));
     }
 
-    private String toJson(TransactionResponse response) {
+    private String toJson(Object value) {
         try {
-            return objectMapper.writeValueAsString(response);
+            return objectMapper.writeValueAsString(value);
         } catch (JsonProcessingException exception) {
-            throw new IllegalStateException("Failed to serialize transaction response", exception);
+            throw new IllegalStateException("Failed to serialize value as JSON", exception);
         }
     }
 

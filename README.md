@@ -100,6 +100,7 @@ flowchart LR
     Transactions -->|POST /transactions/:id/reverse| TransactionTable
     Transactions -->|balanced ledger entries| LedgerTable
     Transactions -->|balance update| AccountTable
+    Transactions -->|TRANSACTION_POSTED outbox row| DB
 ```
 
 Detailed implementation notes live in:
@@ -203,8 +204,12 @@ Implemented:
 - Reusing a reversal idempotency key with a different payload returns `409`
 - Optimistic locking conflicts return `409 CONCURRENT_TRANSACTION_CONFLICT`
 - Concurrent withdrawal tests prove the account cannot be overdrawn by racing requests
+- `outbox_events` table migration
+- Posted transactions and reversals write `TRANSACTION_POSTED` outbox rows in the same database transaction
+- Outbox payloads are stored as PostgreSQL `jsonb`
+- Outbox event creation test verifies a posted transaction creates a pending outbox event
 
-Next: Milestone 3 transactional outbox and Kafka publishing.
+Next: claim-based outbox publisher and Kafka publishing.
 
 ## Local Development
 
@@ -350,6 +355,7 @@ gradle test
 ### Milestone 3
 
 - Transactional outbox table and schema
+- Outbox event writes inside transaction posting/reversal workflows
 - Claim-based outbox publisher
 - Kafka publishing with retry and dead-letter routing
 

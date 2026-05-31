@@ -56,8 +56,12 @@ Current implemented Spring Boot slice:
 - reusing a reversal idempotency key with a different payload returns `409`
 - optimistic locking conflicts return `409 CONCURRENT_TRANSACTION_CONFLICT`
 - concurrent withdrawal tests prove racing requests do not overdraw an account
+- `outbox_events` table
+- posted transactions and reversals write `TRANSACTION_POSTED` outbox rows in the same database transaction
+- outbox payloads are stored as PostgreSQL `jsonb`
+- outbox event creation test verifies pending outbox rows are created
 
-Planned scope includes richer system-account modeling, transactional outbox, Spring Kafka consumers, PayFlow event consumption, balance snapshots, reconciliation, and dead-letter replay.
+Planned scope includes richer system-account modeling, claim-based outbox publishing, Spring Kafka consumers, PayFlow event consumption, balance snapshots, reconciliation, and dead-letter replay.
 
 ## Architecture Rules
 
@@ -146,6 +150,9 @@ V<number>__description.sql
 - Reversal idempotency must use the same `idempotency_keys` conflict rules as normal submissions.
 - Account balance updates rely on optimistic locking through the account `@Version` field.
 - Concurrent account balance write conflicts should return `409 CONCURRENT_TRANSACTION_CONFLICT`, not leak framework exceptions.
+- Outbox rows must be written in the same PostgreSQL transaction as the business change they describe.
+- Outbox event payloads are PostgreSQL `jsonb`; use explicit JDBC/SQL when JSONB binding or claim queries need database-specific behavior.
+- `TRANSACTION_POSTED` events should use aggregate type `TRANSACTION` and aggregate id equal to the transaction id.
 
 ## Security Rules
 
@@ -183,6 +190,7 @@ docker compose config
 - Transaction tests should cover authentication, listing by current user, idempotency, ownership checks, validation, currency mismatch, balance updates, and insufficient funds.
 - Reversal tests should cover offsetting transaction creation, balance restoration, double-reversal rejection, required reason validation, and idempotency.
 - Concurrency tests should cover simultaneous withdrawals and verify the final account balance cannot go negative.
+- Outbox tests should verify posted transactions create pending outbox events with expected aggregate metadata and payload content.
 - Ledger posting tests should cover ledger entry creation, idempotent retry safety, and balanced debits/credits.
 
 ## Local Development Commands
@@ -297,4 +305,4 @@ curl -X POST http://localhost:8080/transactions/<transaction_id>/reverse \
 - Do not make Kafka or caches the source of truth.
 - Do not make protected application endpoints public by default.
 - Do not store raw passwords, JWT secrets, or production credentials in source control.
-- Do not add outbox, Kafka consumers, or reconciliation code before the current milestone calls for it.
+- Do not add Kafka consumers or reconciliation code before the current milestone calls for it.

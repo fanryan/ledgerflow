@@ -1,6 +1,6 @@
 # Transactions
 
-This document explains the current LedgerFlow transaction foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, recording `FAILED` rows for insufficient funds, reversing posted transactions with offsetting ledger entries, and handling concurrent balance updates safely.
+This document explains the current LedgerFlow transaction foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, recording `FAILED` rows for insufficient funds, reversing posted transactions with offsetting ledger entries, handling concurrent balance updates safely, and writing transactional outbox rows for posted transaction events.
 
 The current implementation creates two balanced ledger entries per posted transaction: one for the user account and one for the seeded USD settlement system account.
 
@@ -14,6 +14,7 @@ The Spring Boot API currently supports:
 - `ledger_entries` table through Flyway migration `V5__create_ledger_entries_table.sql`.
 - `idempotency_keys` table through Flyway migration `V7__create_idempotency_keys_table.sql`.
 - Reversal metadata through Flyway migration `V8__add_transaction_reversal_fields.sql`.
+- `outbox_events` table through Flyway migration `V9__create_outbox_events_table.sql`.
 - Authenticated `POST /transactions`.
 - Authenticated `GET /transactions`.
 - Authenticated `POST /transactions/{transactionId}/reverse`.
@@ -39,18 +40,21 @@ The Spring Boot API currently supports:
 - Reversal requests are idempotent through the same `idempotency_keys` table.
 - Optimistic locking conflict handling for concurrent account balance updates.
 - `409 CONCURRENT_TRANSACTION_CONFLICT` for racing writes against the same account balance.
+- `TRANSACTION_POSTED` outbox event creation for successful transaction posting.
+- `TRANSACTION_POSTED` outbox event creation for successful reversals.
+- Outbox payloads stored as PostgreSQL `jsonb`.
 - USD settlement system account seeded by `V6__seed_system_account.sql`.
 - `SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID` centralizes the settlement account UUID in Java.
 - Java models and repositories for `Transaction` and `LedgerEntry`.
 - Transaction flow tests for auth, listing, successful submission, idempotency replay, idempotency conflict, invalid amount, currency mismatch, balance updates, insufficient funds, failed transaction recording, idempotent retry balance safety, account-state guards, balanced ledger entries, reversals, double-reversal rejection, and reversal idempotency.
 - Transaction concurrency test proving simultaneous withdrawals cannot overdraw an account.
+- Outbox event creation test proving a posted transaction creates a pending outbox row.
 
 ### Not Implemented Yet
 
 These are planned, not implemented:
 
 - Richer system-account modeling beyond the seeded USD settlement account.
-- Outbox events for posted transactions.
 - Kafka publishing or consumption.
 - Reconciliation.
 
@@ -374,7 +378,7 @@ Second request with same key and different payload
 
 Current note: the controller still returns `201 Created` for both first and repeated idempotent submissions because it is annotated with `@ResponseStatus(HttpStatus.CREATED)`. The important behavior today is duplicate prevention, same-result return, and no duplicate balance movement.
 
-## 6. Failed Transaction Flow
+## 8. Failed Transaction Flow
 
 Insufficient funds is a business-rule failure that happens after the command is accepted and the target account is loaded.
 
@@ -400,7 +404,35 @@ That matters because `InsufficientFundsException` is a runtime exception. By def
 
 No ledger entries are created for the failed withdrawal, and the account balance is not changed.
 
-## 8. Database Design
+## 9. Outbox Write Flow
+
+When a transaction reaches `POSTED`, LedgerFlow writes a pending outbox event in the same PostgreSQL transaction as the transaction, ledger entries, and account balance update.
+
+```text
+TransactionService
+  |
+  +--> save transaction as POSTED
+  +--> build TransactionPostedEventPayload
+  +--> serialize payload to JSON
+  +--> OutboxService.savePendingEvent(...)
+  |
+  v
+outbox_events row with status PENDING
+```
+
+Current event metadata:
+
+```text
+aggregate_type = TRANSACTION
+aggregate_id   = posted transaction id
+event_type     = TRANSACTION_POSTED
+status         = PENDING
+payload        = transaction event JSON
+```
+
+This is the transactional outbox guarantee: if the database transaction commits, both the business state and the event-to-publish row commit together. Kafka publishing is still planned next; this slice only writes the durable outbox row.
+
+## 10. Database Design
 
 ### `transactions`
 
@@ -505,7 +537,39 @@ Current constant:
 SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID
 ```
 
-## 9. File-by-File Explanation
+### `outbox_events`
+
+Created by:
+
+```text
+services/ledger-api/src/main/resources/db/migration/V9__create_outbox_events_table.sql
+```
+
+Important columns:
+
+- `id`: outbox event primary key.
+- `aggregate_type`: domain aggregate category, currently `TRANSACTION`.
+- `aggregate_id`: aggregate id, currently the posted transaction id.
+- `event_type`: event name, currently `TRANSACTION_POSTED`.
+- `payload`: JSONB event payload.
+- `status`: `PENDING`, `PROCESSING`, `PUBLISHED`, or `FAILED`.
+- `attempts`: publish attempt count.
+- `next_attempt_at`: earliest retry time.
+- `claimed_by`: publisher instance that claimed the row.
+- `locked_until`: claim expiry timestamp for crash recovery.
+- `published_at`: timestamp set after successful publishing.
+- `last_error`: latest publisher error.
+- `created_at`, `updated_at`: timestamps.
+
+Important indexes:
+
+- `idx_outbox_events_publishable`
+- `idx_outbox_events_stale_claims`
+- `idx_outbox_events_aggregate`
+
+The split publishable/stale-claim indexes reflect two different future publisher queries: normal queue polling and crashed-claim recovery.
+
+## 11. File-by-File Explanation
 
 ### `TransactionController.java`
 
@@ -556,12 +620,13 @@ Contains transaction command business logic:
 - update the transaction to `POSTED`
 - mark original transactions with `reversed_at`
 - save idempotency records for transaction submissions and reversals
+- write `TRANSACTION_POSTED` outbox events for posted transactions and reversals
 
 It is wrapped in `@Transactional(noRollbackFor = InsufficientFundsException.class)`.
 
 Successful posting commits transaction creation, ledger entry creation, account balance update, and status update together. Insufficient funds still throws an API error, but the `FAILED` transaction row is committed.
 
-Reversal posting commits the reversal transaction, balanced ledger entries, account balance update, original transaction `reversed_at`, and idempotency record together.
+Reversal posting commits the reversal transaction, balanced ledger entries, account balance update, original transaction `reversed_at`, idempotency record, and outbox event together.
 
 ### `TransactionRepository.java`
 
@@ -588,6 +653,53 @@ It can:
 - save the request hash, transaction id, response status, response body, and expiry
 
 This repository uses explicit SQL because `response_body` is a PostgreSQL `jsonb` column.
+
+### `OutboxService.java`
+
+Creates pending outbox events for committed domain changes.
+
+Current transaction usage:
+
+```text
+aggregateType = TRANSACTION
+eventType     = TRANSACTION_POSTED
+status        = PENDING
+```
+
+The service builds the `OutboxEvent`; the repository owns the database-specific insert.
+
+### `OutboxEventRepository.java`
+
+Uses `NamedParameterJdbcTemplate` for the `outbox_events` table.
+
+It uses explicit SQL because:
+
+- `payload` is PostgreSQL `jsonb`, so writes cast `:payload` with `CAST(:payload AS jsonb)`.
+- outbox publisher work will need claim/retry queries that are more precise than simple derived repository methods.
+
+Current methods:
+
+- `save(...)`
+- `findByAggregateId(...)`
+
+### `OutboxEvent.java`
+
+Data carrier for one row in `outbox_events`.
+
+### `OutboxEventStatus.java`
+
+Enum:
+
+- `PENDING`
+- `PROCESSING`
+- `PUBLISHED`
+- `FAILED`
+
+### `TransactionPostedEventPayload.java`
+
+Event payload DTO for `TRANSACTION_POSTED`.
+
+This is separate from `TransactionResponse` because API responses and asynchronous event contracts can evolve differently.
 
 ### `IdempotencyRecord.java`
 
@@ -794,7 +906,7 @@ USD_SETTLEMENT_ACCOUNT_ID
 
 This points to the seeded USD settlement account used for offset entries.
 
-## 10. Design Decisions
+## 12. Design Decisions
 
 ### Why Idempotency Uses a Header
 
@@ -949,7 +1061,38 @@ same key + same reversal payload      -> replay original reversal
 same key + different reversal payload -> 409 IDEMPOTENCY_CONFLICT
 ```
 
-## 11. Common Debugging Lessons
+### Why Outbox Writes Happen In The Same Transaction
+
+The outbox row is the durable promise that a committed business change will eventually be published to Kafka.
+
+If LedgerFlow updated balances and then tried to publish directly to Kafka, it could crash between the database commit and Kafka publish. That would create a dual-write inconsistency.
+
+Instead, transaction posting writes:
+
+```text
+transaction row
+ledger entries
+account balance update
+outbox event row
+```
+
+inside the same PostgreSQL transaction.
+
+The future publisher can safely read `PENDING` rows and publish them after the business transaction commits.
+
+### Why Outbox Uses Explicit SQL
+
+The outbox payload is PostgreSQL `jsonb`. Spring Data JDBC does not automatically know how to bind a Java `String` as JSONB or read PostgreSQL `PGobject` back into a string without converters.
+
+The repository uses explicit SQL so the boundary is obvious:
+
+```sql
+CAST(:payload AS jsonb)
+```
+
+This also prepares the repository for claim-based publisher queries.
+
+## 13. Common Debugging Lessons
 
 ### Reused Idempotency Keys Return Old Results
 
@@ -1023,7 +1166,7 @@ LedgerFlow maps that stale-version failure to:
 
 That response means the client should reload state and decide whether to retry. It is different from `422 INSUFFICIENT_FUNDS`: insufficient funds is a business-rule failure based on the current balance, while `409` is a write conflict caused by concurrent modification.
 
-## 12. Interview Questions and Answers
+## 14. Interview Questions and Answers
 
 1. **What does the transaction endpoint currently do?**  
    It accepts an authenticated transaction command, creates balanced ledger entries, updates the account balance, and returns a `POSTED` transaction.
@@ -1109,9 +1252,21 @@ That response means the client should reload state and decide whether to retry. 
 28. **Why return 409 for an optimistic locking conflict?**  
     It is a state conflict, not malformed input. The client should reload the account state before retrying.
 
-## 13. Checklist Before Moving On
+29. **What outbox event is written today?**  
+    `TRANSACTION_POSTED` with aggregate type `TRANSACTION` and aggregate id equal to the posted transaction id.
 
-Before moving on to outbox, be able to explain:
+30. **Why write the outbox row in the same transaction as ledger posting?**  
+    It prevents dual-write inconsistency. If the business transaction commits, the durable event row commits too.
+
+31. **Why is the outbox payload stored as JSONB?**  
+    It keeps the event payload structured and queryable while still allowing flexible event shapes.
+
+32. **Why does `OutboxEventRepository` use explicit SQL?**  
+    JSONB binding and future claim-based polling are database-specific enough that explicit JDBC is clearer than derived CRUD methods.
+
+## 15. Checklist Before Moving On
+
+Before moving on to the outbox publisher, be able to explain:
 
 - [ ] Why `POST /transactions` requires authentication.
 - [ ] Why `GET /transactions` is scoped to the authenticated user.
@@ -1139,3 +1294,7 @@ Before moving on to outbox, be able to explain:
 - [ ] How optimistic locking protects account balance updates.
 - [ ] Why simultaneous withdrawals can produce one `201` and one `409`.
 - [ ] Why `409 CONCURRENT_TRANSACTION_CONFLICT` is different from `422 INSUFFICIENT_FUNDS`.
+- [ ] Why outbox rows are written in the same database transaction as business writes.
+- [ ] What `TRANSACTION_POSTED` contains today.
+- [ ] Why `OutboxEventRepository` uses explicit SQL for JSONB.
+- [ ] Why the next step is claiming/publishing pending outbox rows.

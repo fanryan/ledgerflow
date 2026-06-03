@@ -1,12 +1,25 @@
 package com.fanryan.ledgerflow.outbox;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 class LedgerEventsConsumerTest {
 
     @Test
-    void consumeAcceptsLedgerEventPayload() {
-        LedgerEventsConsumer consumer = new LedgerEventsConsumer();
+    void consumeStoresLedgerEventPayload() {
+        ConsumedLedgerEventRepository repository = mock(ConsumedLedgerEventRepository.class);
+        LedgerEventsConsumer consumer = new LedgerEventsConsumer(
+                new ObjectMapper(),
+                repository
+        );
+
+        when(repository.insertIfNotExists(any(ConsumedLedgerEvent.class)))
+                .thenReturn(true);
 
         consumer.consume("""
                 {
@@ -21,5 +34,7 @@ class LedgerEventsConsumerTest {
                   "reversalOfTransactionId": null
                 }
                 """);
+
+        verify(repository).insertIfNotExists(any(ConsumedLedgerEvent.class));
     }
 }

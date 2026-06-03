@@ -4,6 +4,7 @@
 # IDEs
 .idea/
 .vscode/
+.antigravitycli
 
 # Java / Gradle
 .gradle/

@@ -60,8 +60,8 @@ flowchart LR
 
     Client -->|health, auth, accounts, transactions| API
     API -->|source of truth| DB
-    DB -->|planned outbox polling| Outbox
-    Outbox -->|planned events| Kafka
+    DB -->|claim-based outbox polling| Outbox
+    Outbox -->|TRANSACTION_POSTED events| Kafka
     Kafka --> TxConsumer
     Kafka --> Reconciliation
     Kafka --> Deadletter
@@ -149,7 +149,7 @@ ledgerflow/
 
 ## Current Status
 
-Current stage: **Milestone 2 - Failure Handling, Concurrency, and Reversals**
+Current stage: **Milestone 3 - Transactional Outbox Publishing**
 
 Implemented:
 
@@ -208,8 +208,15 @@ Implemented:
 - Posted transactions and reversals write `TRANSACTION_POSTED` outbox rows in the same database transaction
 - Outbox payloads are stored as PostgreSQL `jsonb`
 - Outbox event creation test verifies a posted transaction creates a pending outbox event
+- Claim-based outbox publisher with `FOR UPDATE SKIP LOCKED`
+- Stale claim recovery through `locked_until`
+- Scheduled Spring Boot outbox publisher
+- Kafka publishing to `ledger.events`
+- Published events are marked `PUBLISHED`
+- Failed publishes are marked `FAILED` with retry metadata
+- Outbox repository and publisher service tests
 
-Next: claim-based outbox publisher and Kafka publishing.
+Next: Spring Kafka consumers and downstream event processing.
 
 ## Local Development
 
@@ -357,12 +364,14 @@ gradle test
 - Transactional outbox table and schema
 - Outbox event writes inside transaction posting/reversal workflows
 - Claim-based outbox publisher
-- Kafka publishing with retry and dead-letter routing
+- Kafka publishing with retry metadata
+- Outbox publisher tests
 
 ### Milestone 4
 
 - Spring Boot Kafka consumers
 - PayFlow consumer for `payment.captured` and `payment.settled`
+- Dead-letter routing and replay
 - Reconciliation jobs with structured report output
 - Scheduled reconciliation
 - Dead-letter replay tooling

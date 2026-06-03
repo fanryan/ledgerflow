@@ -1,6 +1,6 @@
 # Transactions
 
-This document explains the current LedgerFlow transaction foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, recording `FAILED` rows for insufficient funds, reversing posted transactions with offsetting ledger entries, handling concurrent balance updates safely, and writing transactional outbox rows for posted transaction events.
+This document explains the current LedgerFlow transaction foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, recording `FAILED` rows for insufficient funds, reversing posted transactions with offsetting ledger entries, handling concurrent balance updates safely, writing transactional outbox rows for posted transaction events, and publishing those outbox events to Kafka through a scheduled claim-based publisher.
 
 The current implementation creates two balanced ledger entries per posted transaction: one for the user account and one for the seeded USD settlement system account.
 
@@ -43,19 +43,27 @@ The Spring Boot API currently supports:
 - `TRANSACTION_POSTED` outbox event creation for successful transaction posting.
 - `TRANSACTION_POSTED` outbox event creation for successful reversals.
 - Outbox payloads stored as PostgreSQL `jsonb`.
+- Claim-based outbox publishing with `FOR UPDATE SKIP LOCKED`.
+- Stale outbox claim recovery through `locked_until`.
+- Scheduled Spring Boot outbox publisher.
+- Kafka publishing to topic `ledger.events`.
+- Successful publishes mark rows as `PUBLISHED`.
+- Failed publishes mark rows as `FAILED` with retry metadata.
 - USD settlement system account seeded by `V6__seed_system_account.sql`.
 - `SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID` centralizes the settlement account UUID in Java.
 - Java models and repositories for `Transaction` and `LedgerEntry`.
 - Transaction flow tests for auth, listing, successful submission, idempotency replay, idempotency conflict, invalid amount, currency mismatch, balance updates, insufficient funds, failed transaction recording, idempotent retry balance safety, account-state guards, balanced ledger entries, reversals, double-reversal rejection, and reversal idempotency.
 - Transaction concurrency test proving simultaneous withdrawals cannot overdraw an account.
 - Outbox event creation test proving a posted transaction creates a pending outbox row.
+- Outbox repository tests for claim, publish, and failed-publish transitions.
+- Outbox publisher service tests for successful Kafka publish and failed Kafka publish handling.
 
 ### Not Implemented Yet
 
 These are planned, not implemented:
 
 - Richer system-account modeling beyond the seeded USD settlement account.
-- Kafka publishing or consumption.
+- Kafka consumption.
 - Reconciliation.
 
 ## 2. Endpoint
@@ -430,7 +438,7 @@ status         = PENDING
 payload        = transaction event JSON
 ```
 
-This is the transactional outbox guarantee: if the database transaction commits, both the business state and the event-to-publish row commit together. Kafka publishing is still planned next; this slice only writes the durable outbox row.
+This is the transactional outbox guarantee: if the database transaction commits, both the business state and the event-to-publish row commit together. The scheduled publisher later claims committed rows, sends the payload to Kafka, and marks each row as `PUBLISHED` or `FAILED`.
 
 ## 10. Database Design
 
@@ -567,9 +575,56 @@ Important indexes:
 - `idx_outbox_events_stale_claims`
 - `idx_outbox_events_aggregate`
 
-The split publishable/stale-claim indexes reflect two different future publisher queries: normal queue polling and crashed-claim recovery.
+The split publishable/stale-claim indexes reflect two different publisher queries: normal queue polling and crashed-claim recovery.
 
-## 11. File-by-File Explanation
+## 11. Outbox Publisher Flow
+
+The scheduled outbox publisher turns durable database events into Kafka messages.
+
+```text
+OutboxPublisherScheduler
+  |
+  | every ledgerflow.outbox.publisher.fixed-delay-ms
+  v
+OutboxPublisherService.publishBatch()
+  |
+  +--> OutboxEventRepository.claimPublishableEvents(...)
+  |       |
+  |       +--> PENDING / retryable FAILED rows
+  |       +--> stale PROCESSING rows where locked_until < now()
+  |       +--> FOR UPDATE SKIP LOCKED
+  |       +--> status = PROCESSING
+  |
+  +--> KafkaTemplate.send("ledger.events", aggregateId, payload)
+  |
+  +--> success: markPublished(...)
+  |       |
+  |       +--> status = PUBLISHED
+  |       +--> published_at = now()
+  |       +--> claimed_by / locked_until cleared
+  |
+  +--> failure: markFailed(...)
+          |
+          +--> status = FAILED
+          +--> attempts incremented
+          +--> next_attempt_at scheduled
+          +--> last_error stored
+          +--> claimed_by / locked_until cleared
+```
+
+The publisher is controlled by:
+
+```yaml
+ledgerflow:
+  outbox:
+    publisher:
+      enabled: true
+      fixed-delay-ms: 5000
+```
+
+Tests disable the scheduler in `src/test/resources/application.yml` so Kafka publishing does not run in the background while MockMvc tests are executing.
+
+## 12. File-by-File Explanation
 
 ### `TransactionController.java`
 
@@ -681,6 +736,27 @@ Current methods:
 
 - `save(...)`
 - `findByAggregateId(...)`
+- `claimPublishableEvents(...)`
+- `markPublished(...)`
+- `markFailed(...)`
+
+`claimPublishableEvents(...)` uses `FOR UPDATE SKIP LOCKED` so multiple publisher instances can safely claim different rows without blocking each other.
+
+### `OutboxPublisherService.java`
+
+Claims publishable outbox events, sends each payload to Kafka topic `ledger.events`, and updates the row based on the outcome.
+
+Successful sends call `markPublished(...)`. Failed sends call `markFailed(...)` and schedule the next retry.
+
+### `OutboxPublisherScheduler.java`
+
+Runs `OutboxPublisherService.publishBatch()` on a fixed delay.
+
+The scheduler can be disabled with:
+
+```text
+ledgerflow.outbox.publisher.enabled=false
+```
 
 ### `OutboxEvent.java`
 
@@ -906,7 +982,7 @@ USD_SETTLEMENT_ACCOUNT_ID
 
 This points to the seeded USD settlement account used for offset entries.
 
-## 12. Design Decisions
+## 13. Design Decisions
 
 ### Why Idempotency Uses a Header
 
@@ -1078,7 +1154,7 @@ outbox event row
 
 inside the same PostgreSQL transaction.
 
-The future publisher can safely read `PENDING` rows and publish them after the business transaction commits.
+The scheduled publisher safely reads committed `PENDING` rows and publishes them after the business transaction commits.
 
 ### Why Outbox Uses Explicit SQL
 
@@ -1090,9 +1166,9 @@ The repository uses explicit SQL so the boundary is obvious:
 CAST(:payload AS jsonb)
 ```
 
-This also prepares the repository for claim-based publisher queries.
+The repository also owns claim-based publisher queries such as `FOR UPDATE SKIP LOCKED`, `markPublished(...)`, and `markFailed(...)`.
 
-## 13. Common Debugging Lessons
+## 14. Common Debugging Lessons
 
 ### Reused Idempotency Keys Return Old Results
 
@@ -1166,7 +1242,7 @@ LedgerFlow maps that stale-version failure to:
 
 That response means the client should reload state and decide whether to retry. It is different from `422 INSUFFICIENT_FUNDS`: insufficient funds is a business-rule failure based on the current balance, while `409` is a write conflict caused by concurrent modification.
 
-## 14. Interview Questions and Answers
+## 15. Interview Questions and Answers
 
 1. **What does the transaction endpoint currently do?**  
    It accepts an authenticated transaction command, creates balanced ledger entries, updates the account balance, and returns a `POSTED` transaction.
@@ -1262,11 +1338,23 @@ That response means the client should reload state and decide whether to retry. 
     It keeps the event payload structured and queryable while still allowing flexible event shapes.
 
 32. **Why does `OutboxEventRepository` use explicit SQL?**  
-    JSONB binding and future claim-based polling are database-specific enough that explicit JDBC is clearer than derived CRUD methods.
+    JSONB binding and claim-based polling are database-specific enough that explicit JDBC is clearer than derived CRUD methods.
 
-## 15. Checklist Before Moving On
+33. **How does the outbox publisher avoid multiple instances publishing the same row?**  
+    It claims rows with `FOR UPDATE SKIP LOCKED`, so concurrent publisher instances skip rows already locked by another transaction.
 
-Before moving on to the outbox publisher, be able to explain:
+34. **Why does the outbox table use `locked_until`?**  
+    It gives claims an expiry time. If a publisher crashes while processing a row, a later run can reclaim it after the lock expires.
+
+35. **What happens after Kafka publish succeeds?**  
+    The publisher marks the event `PUBLISHED`, sets `published_at`, and clears claim fields.
+
+36. **What happens after Kafka publish fails?**  
+    The publisher marks the event `FAILED`, increments `attempts`, stores `last_error`, and schedules `next_attempt_at`.
+
+## 16. Checklist Before Moving On
+
+Before moving on to Kafka consumers, be able to explain:
 
 - [ ] Why `POST /transactions` requires authentication.
 - [ ] Why `GET /transactions` is scoped to the authenticated user.
@@ -1297,4 +1385,8 @@ Before moving on to the outbox publisher, be able to explain:
 - [ ] Why outbox rows are written in the same database transaction as business writes.
 - [ ] What `TRANSACTION_POSTED` contains today.
 - [ ] Why `OutboxEventRepository` uses explicit SQL for JSONB.
-- [ ] Why the next step is claiming/publishing pending outbox rows.
+- [ ] How `FOR UPDATE SKIP LOCKED` supports concurrent outbox publishers.
+- [ ] Why `locked_until` supports stale claim recovery.
+- [ ] How successful publishes become `PUBLISHED`.
+- [ ] How failed publishes become `FAILED` and retryable.
+- [ ] Why the test profile disables the scheduled publisher.

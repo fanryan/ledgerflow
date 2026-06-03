@@ -63,11 +63,13 @@ Current implemented Spring Boot slice:
 - claim-based outbox publisher uses `FOR UPDATE SKIP LOCKED`
 - outbox claims use `locked_until` for stale claim recovery
 - scheduled Spring Boot publisher sends outbox payloads to Kafka topic `ledger.events`
+- log-only Spring Kafka consumer reads `ledger.events`
+- consumed `TRANSACTION_POSTED` events have been manually verified in application logs
 - published events are marked `PUBLISHED`
 - failed publishes are marked `FAILED` with retry metadata
-- outbox repository and publisher service tests cover claim, publish, and failure paths
+- outbox repository, publisher service, and consumer tests cover claim, publish, failure, and basic consumption paths
 
-Planned scope includes richer system-account modeling, Spring Kafka consumers, PayFlow event consumption, balance snapshots, reconciliation, and dead-letter replay.
+Planned scope includes richer system-account modeling, downstream consumer side effects, PayFlow event consumption, balance snapshots, reconciliation, and dead-letter replay.
 
 ## Architecture Rules
 
@@ -118,6 +120,7 @@ gradle bootRun
 - Keep asynchronous LedgerFlow components inside the Spring Boot service unless the architecture is deliberately changed later.
 - Outbox publishing should read committed PostgreSQL outbox rows and publish them to Kafka.
 - Kafka consumers should be idempotent and retry-safe.
+- Current `LedgerEventsConsumer` is log-only; do not treat it as a projection, reconciliation, or dead-letter implementation.
 - Reconciliation should compare authoritative PostgreSQL state against derived or external state.
 - Dead-letter replay should be explicit, auditable, and safe to retry.
 
@@ -198,7 +201,7 @@ docker compose config
 - Transaction tests should cover authentication, listing by current user, idempotency, ownership checks, validation, currency mismatch, balance updates, and insufficient funds.
 - Reversal tests should cover offsetting transaction creation, balance restoration, double-reversal rejection, required reason validation, and idempotency.
 - Concurrency tests should cover simultaneous withdrawals and verify the final account balance cannot go negative.
-- Outbox tests should verify posted transactions create pending outbox events, repository claim transitions, successful publish marking, and failed publish retry metadata.
+- Outbox tests should verify posted transactions create pending outbox events, repository claim transitions, successful publish marking, failed publish retry metadata, and basic consumer payload handling.
 - Ledger posting tests should cover ledger entry creation, idempotent retry safety, and balanced debits/credits.
 
 ## Local Development Commands

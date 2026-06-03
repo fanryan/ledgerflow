@@ -1,6 +1,6 @@
 # Transactions
 
-This document explains the current LedgerFlow transaction foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, recording `FAILED` rows for insufficient funds, reversing posted transactions with offsetting ledger entries, handling concurrent balance updates safely, writing transactional outbox rows for posted transaction events, and publishing those outbox events to Kafka through a scheduled claim-based publisher.
+This document explains the current LedgerFlow transaction foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, recording `FAILED` rows for insufficient funds, reversing posted transactions with offsetting ledger entries, handling concurrent balance updates safely, writing transactional outbox rows for posted transaction events, publishing those outbox events to Kafka through a scheduled claim-based publisher, and consuming `ledger.events` with a log-only Kafka consumer.
 
 The current implementation creates two balanced ledger entries per posted transaction: one for the user account and one for the seeded USD settlement system account.
 
@@ -47,6 +47,8 @@ The Spring Boot API currently supports:
 - Stale outbox claim recovery through `locked_until`.
 - Scheduled Spring Boot outbox publisher.
 - Kafka publishing to topic `ledger.events`.
+- Log-only Kafka consumption from topic `ledger.events`.
+- Manual verification that published `TRANSACTION_POSTED` events are consumed by `LedgerEventsConsumer`.
 - Successful publishes mark rows as `PUBLISHED`.
 - Failed publishes mark rows as `FAILED` with retry metadata.
 - USD settlement system account seeded by `V6__seed_system_account.sql`.
@@ -57,13 +59,14 @@ The Spring Boot API currently supports:
 - Outbox event creation test proving a posted transaction creates a pending outbox row.
 - Outbox repository tests for claim, publish, and failed-publish transitions.
 - Outbox publisher service tests for successful Kafka publish and failed Kafka publish handling.
+- Kafka consumer test proving the current event payload can be accepted by `LedgerEventsConsumer`.
 
 ### Not Implemented Yet
 
 These are planned, not implemented:
 
 - Richer system-account modeling beyond the seeded USD settlement account.
-- Kafka consumption.
+- Consumer side effects, projections, reconciliation state, and dead-letter handling.
 - Reconciliation.
 
 ## 2. Endpoint
@@ -624,7 +627,40 @@ ledgerflow:
 
 Tests disable the scheduler in `src/test/resources/application.yml` so Kafka publishing does not run in the background while MockMvc tests are executing.
 
-## 12. File-by-File Explanation
+## 12. Kafka Consumer Flow
+
+The current consumer is intentionally small. It proves that the application can receive events from Kafka without adding projection or reconciliation side effects yet.
+
+```text
+Kafka topic: ledger.events
+  |
+  v
+LedgerEventsConsumer.consume(payload)
+  |
+  v
+log "Consumed ledger event: ..."
+```
+
+Current behavior:
+
+- consumes string payloads from `ledger.events`
+- logs the raw `TRANSACTION_POSTED` JSON payload
+- does not write projections
+- does not update reconciliation state
+- does not write dead-letter records
+
+Tests disable listener startup with:
+
+```yaml
+spring:
+  kafka:
+    listener:
+      auto-startup: false
+```
+
+That keeps MockMvc tests from opening background Kafka listener connections.
+
+## 13. File-by-File Explanation
 
 ### `TransactionController.java`
 
@@ -757,6 +793,18 @@ The scheduler can be disabled with:
 ```text
 ledgerflow.outbox.publisher.enabled=false
 ```
+
+### `LedgerEventsConsumer.java`
+
+Listens to Kafka topic `ledger.events`.
+
+Current behavior is log-only:
+
+```text
+Consumed ledger event: <payload>
+```
+
+This confirms end-to-end publish/consume wiring. It is not yet a projection, reconciliation, or dead-letter implementation.
 
 ### `OutboxEvent.java`
 
@@ -982,7 +1030,7 @@ USD_SETTLEMENT_ACCOUNT_ID
 
 This points to the seeded USD settlement account used for offset entries.
 
-## 13. Design Decisions
+## 14. Design Decisions
 
 ### Why Idempotency Uses a Header
 
@@ -1168,7 +1216,7 @@ CAST(:payload AS jsonb)
 
 The repository also owns claim-based publisher queries such as `FOR UPDATE SKIP LOCKED`, `markPublished(...)`, and `markFailed(...)`.
 
-## 14. Common Debugging Lessons
+## 15. Common Debugging Lessons
 
 ### Reused Idempotency Keys Return Old Results
 
@@ -1242,7 +1290,7 @@ LedgerFlow maps that stale-version failure to:
 
 That response means the client should reload state and decide whether to retry. It is different from `422 INSUFFICIENT_FUNDS`: insufficient funds is a business-rule failure based on the current balance, while `409` is a write conflict caused by concurrent modification.
 
-## 15. Interview Questions and Answers
+## 16. Interview Questions and Answers
 
 1. **What does the transaction endpoint currently do?**  
    It accepts an authenticated transaction command, creates balanced ledger entries, updates the account balance, and returns a `POSTED` transaction.
@@ -1352,9 +1400,15 @@ That response means the client should reload state and decide whether to retry. 
 36. **What happens after Kafka publish fails?**  
     The publisher marks the event `FAILED`, increments `attempts`, stores `last_error`, and schedules `next_attempt_at`.
 
-## 16. Checklist Before Moving On
+37. **What does the current Kafka consumer do?**  
+    It consumes payloads from `ledger.events` and logs them. It does not yet write projections, reconciliation state, or dead-letter records.
 
-Before moving on to Kafka consumers, be able to explain:
+38. **Why keep the first consumer log-only?**  
+    It proves end-to-end Kafka wiring before adding new state changes that must be made idempotent and retry-safe.
+
+## 17. Checklist Before Moving On
+
+Before moving on to consumer side effects and reconciliation, be able to explain:
 
 - [ ] Why `POST /transactions` requires authentication.
 - [ ] Why `GET /transactions` is scoped to the authenticated user.
@@ -1390,3 +1444,6 @@ Before moving on to Kafka consumers, be able to explain:
 - [ ] How successful publishes become `PUBLISHED`.
 - [ ] How failed publishes become `FAILED` and retryable.
 - [ ] Why the test profile disables the scheduled publisher.
+- [ ] What `LedgerEventsConsumer` consumes today.
+- [ ] Why the first consumer is log-only.
+- [ ] Why tests disable Kafka listener auto-startup.

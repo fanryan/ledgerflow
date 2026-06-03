@@ -212,11 +212,13 @@ Implemented:
 - Stale claim recovery through `locked_until`
 - Scheduled Spring Boot outbox publisher
 - Kafka publishing to `ledger.events`
+- Log-only Spring Kafka consumer for `ledger.events`
+- Manual verification of published `TRANSACTION_POSTED` events being consumed
 - Published events are marked `PUBLISHED`
 - Failed publishes are marked `FAILED` with retry metadata
-- Outbox repository and publisher service tests
+- Outbox repository, publisher service, and consumer tests
 
-Next: Spring Kafka consumers and downstream event processing.
+Next: downstream consumer behavior, reconciliation state, and dead-letter handling.
 
 ## Local Development
 
@@ -369,8 +371,9 @@ gradle test
 
 ### Milestone 4
 
-- Spring Boot Kafka consumers
+- Spring Boot Kafka consumer foundation
 - PayFlow consumer for `payment.captured` and `payment.settled`
+- Downstream consumer side effects and projection/reconciliation state
 - Dead-letter routing and replay
 - Reconciliation jobs with structured report output
 - Scheduled reconciliation

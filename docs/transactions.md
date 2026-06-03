@@ -64,14 +64,17 @@ The Spring Boot API currently supports:
 - Outbox publisher service tests for successful Kafka publish and failed Kafka publish handling.
 - Kafka consumer test proving the current event payload is passed to the consumed-event repository.
 - Consumed event repository tests proving first insert succeeds and duplicate insert is ignored.
+- Ledger balance reconciliation checks posted transactions for debit/credit imbalances.
+- Reconciliation reports are persisted in `reconciliation_reports`.
+- Authenticated `POST /reconciliation/ledger-balance-check` endpoint.
+- Reconciliation repository, service, and flow tests.
 
 ### Not Implemented Yet
 
 These are planned, not implemented:
 
 - Richer system-account modeling beyond the seeded USD settlement account.
-- Projections, reconciliation state, and dead-letter handling.
-- Reconciliation.
+- Projections, richer reconciliation details, scheduled reconciliation, and dead-letter handling.
 
 ## 2. Endpoint
 
@@ -608,6 +611,31 @@ UNIQUE (transaction_id, event_type)
 
 That uniqueness makes duplicate Kafka delivery safe for the current consumer side effect. If Kafka redelivers the same `TRANSACTION_POSTED` event, the insert uses `ON CONFLICT DO NOTHING` and the table still contains only one audit row.
 
+### `reconciliation_reports`
+
+Created by:
+
+```text
+services/ledger-api/src/main/resources/db/migration/V11__create_reconciliation_reports_table.sql
+```
+
+Important columns:
+
+- `id`: report primary key.
+- `report_type`: report category, currently `LEDGER_BALANCE_CHECK`.
+- `status`: `PASSED` or `FAILED`.
+- `checked_transactions`: number of posted transactions included in the check.
+- `imbalance_count`: number of transactions whose ledger entries do not balance.
+- `details`: JSONB report metadata.
+- `started_at`, `completed_at`: reconciliation timing.
+
+The current report checks the double-entry invariant:
+
+```text
+for each posted transaction:
+  total DEBIT amount - total CREDIT amount == 0
+```
+
 ## 11. Outbox Publisher Flow
 
 The scheduled outbox publisher turns durable database events into Kafka messages.
@@ -694,7 +722,41 @@ spring:
 
 That keeps MockMvc tests from opening background Kafka listener connections.
 
-## 13. File-by-File Explanation
+## 13. Reconciliation Flow
+
+The current reconciliation slice validates the ledger balance invariant and stores an audit report.
+
+```text
+Client
+  |
+  | POST /reconciliation/ledger-balance-check
+  | Authorization: Bearer <access_token>
+  v
+ReconciliationController
+  |
+  v
+ReconciliationService.runLedgerBalanceCheck()
+  |
+  +--> count POSTED transactions
+  +--> count transactions whose ledger entries do not balance
+  +--> status = PASSED if imbalanceCount == 0 else FAILED
+  +--> save ReconciliationReport
+  |
+  v
+reconciliation_reports row
+```
+
+Manual verification passed with:
+
+```text
+checkedTransactions = 1006
+imbalanceCount      = 0
+status              = PASSED
+```
+
+This proves the currently-posted local ledger entries satisfy the double-entry balance invariant.
+
+## 14. File-by-File Explanation
 
 ### `TransactionController.java`
 
@@ -859,6 +921,52 @@ Current methods:
 
 - `insertIfNotExists(...)`
 - `countByTransactionIdAndEventType(...)`
+
+### `ReconciliationController.java`
+
+Defines:
+
+```text
+POST /reconciliation/ledger-balance-check
+```
+
+The endpoint is authenticated by default through Spring Security.
+
+### `ReconciliationService.java`
+
+Runs the current ledger balance check:
+
+- counts posted transactions
+- counts imbalanced transaction ledgers
+- creates a `PASSED` or `FAILED` report
+- persists the report
+
+### `ReconciliationReportRepository.java`
+
+Uses `NamedParameterJdbcTemplate` for `reconciliation_reports`.
+
+It owns explicit SQL because:
+
+- `details` is PostgreSQL `jsonb`
+- reconciliation queries are report-specific SQL
+
+Current methods:
+
+- `save(...)`
+- `countById(...)`
+- `countLedgerEntryImbalances(...)`
+- `countPostedTransactions(...)`
+
+### `ReconciliationReport.java`
+
+Data carrier for a reconciliation report row.
+
+### `ReconciliationReportStatus.java`
+
+Enum:
+
+- `PASSED`
+- `FAILED`
 
 ### `OutboxEvent.java`
 
@@ -1084,7 +1192,7 @@ USD_SETTLEMENT_ACCOUNT_ID
 
 This points to the seeded USD settlement account used for offset entries.
 
-## 14. Design Decisions
+## 15. Design Decisions
 
 ### Why Idempotency Uses a Header
 
@@ -1270,7 +1378,7 @@ CAST(:payload AS jsonb)
 
 The repository also owns claim-based publisher queries such as `FOR UPDATE SKIP LOCKED`, `markPublished(...)`, and `markFailed(...)`.
 
-## 15. Common Debugging Lessons
+## 16. Common Debugging Lessons
 
 ### Reused Idempotency Keys Return Old Results
 
@@ -1344,7 +1452,7 @@ LedgerFlow maps that stale-version failure to:
 
 That response means the client should reload state and decide whether to retry. It is different from `422 INSUFFICIENT_FUNDS`: insufficient funds is a business-rule failure based on the current balance, while `409` is a write conflict caused by concurrent modification.
 
-## 16. Interview Questions and Answers
+## 17. Interview Questions and Answers
 
 1. **What does the transaction endpoint currently do?**  
    It accepts an authenticated transaction command, creates balanced ledger entries, updates the account balance, and returns a `POSTED` transaction.
@@ -1463,9 +1571,18 @@ That response means the client should reload state and decide whether to retry. 
 39. **Why keep the first consumer side effect small?**  
     It proves end-to-end Kafka wiring and retry-safe consumption before adding projections, reconciliation state, or dead-letter handling.
 
-## 17. Checklist Before Moving On
+40. **What does the current reconciliation check verify?**  
+    It verifies that each posted transaction has balanced ledger entries: total debits equal total credits.
 
-Before moving on to reconciliation state and dead-letter handling, be able to explain:
+41. **What does `imbalanceCount = 0` mean?**  
+    It means no posted transaction violated the double-entry balance invariant during that reconciliation run.
+
+42. **Why persist reconciliation reports?**  
+    They provide an audit trail of when checks ran, what was checked, and whether the ledger passed.
+
+## 18. Checklist Before Moving On
+
+Before moving on to richer reconciliation details and dead-letter handling, be able to explain:
 
 - [ ] Why `POST /transactions` requires authentication.
 - [ ] Why `GET /transactions` is scoped to the authenticated user.
@@ -1506,3 +1623,7 @@ Before moving on to reconciliation state and dead-letter handling, be able to ex
 - [ ] Why duplicate consumed events are ignored.
 - [ ] Why the first consumer side effect is intentionally small.
 - [ ] Why tests disable Kafka listener auto-startup.
+- [ ] What `POST /reconciliation/ledger-balance-check` does.
+- [ ] How `imbalanceCount` is calculated.
+- [ ] Why reconciliation reports are persisted.
+- [ ] What the current reconciliation slice does not check yet.

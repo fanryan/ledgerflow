@@ -70,8 +70,13 @@ Current implemented Spring Boot slice:
 - published events are marked `PUBLISHED`
 - failed publishes are marked `FAILED` with retry metadata
 - outbox repository, publisher service, consumer, and consumed-event repository tests cover claim, publish, failure, consumption, and duplicate-consumption paths
+- `reconciliation_reports` table
+- authenticated `POST /reconciliation/ledger-balance-check`
+- ledger balance reconciliation checks posted transactions for debit/credit imbalances
+- reconciliation reports persist `PASSED` or `FAILED` summaries with JSONB details
+- reconciliation repository, service, and flow tests cover report persistence and endpoint access
 
-Planned scope includes richer system-account modeling, PayFlow event consumption, balance snapshots, reconciliation, and dead-letter replay.
+Planned scope includes richer system-account modeling, PayFlow event consumption, balance snapshots, richer reconciliation detail payloads, scheduled reconciliation, and dead-letter replay.
 
 ## Architecture Rules
 
@@ -123,7 +128,8 @@ gradle bootRun
 - Outbox publishing should read committed PostgreSQL outbox rows and publish them to Kafka.
 - Kafka consumers should be idempotent and retry-safe.
 - Current `LedgerEventsConsumer` records consumed events for audit/idempotency; do not treat it as a projection, reconciliation, or dead-letter implementation.
-- Reconciliation should compare authoritative PostgreSQL state against derived or external state.
+- Current reconciliation checks ledger-entry debit/credit balance for posted transactions and writes report rows.
+- Future reconciliation should compare authoritative PostgreSQL state against derived or external state.
 - Dead-letter replay should be explicit, auditable, and safe to retry.
 
 ## Database and Migration Rules
@@ -204,6 +210,7 @@ docker compose config
 - Reversal tests should cover offsetting transaction creation, balance restoration, double-reversal rejection, required reason validation, and idempotency.
 - Concurrency tests should cover simultaneous withdrawals and verify the final account balance cannot go negative.
 - Outbox tests should verify posted transactions create pending outbox events, repository claim transitions, successful publish marking, failed publish retry metadata, consumer payload handling, and duplicate consumed-event safety.
+- Reconciliation tests should verify report persistence, pass/fail status decisions, endpoint authentication, and report creation.
 - Ledger posting tests should cover ledger entry creation, idempotent retry safety, and balanced debits/credits.
 
 ## Local Development Commands

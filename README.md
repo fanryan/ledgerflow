@@ -108,6 +108,7 @@ Detailed implementation notes live in:
 - [Authentication](docs/authentication.md)
 - [Accounts](docs/accounts.md)
 - [Transactions](docs/transactions.md)
+- [Reconciliation](docs/reconciliation.md)
 
 ## Repository Structure
 
@@ -220,8 +221,14 @@ Implemented:
 - Published events are marked `PUBLISHED`
 - Failed publishes are marked `FAILED` with retry metadata
 - Outbox repository, publisher service, consumer, and consumed-event repository tests
+- `reconciliation_reports` table migration
+- Authenticated `POST /reconciliation/ledger-balance-check`
+- Ledger balance reconciliation checks posted transactions for debit/credit imbalances
+- Reconciliation reports persist `PASSED` or `FAILED` summaries with JSONB details
+- Manual verification passed with `checkedTransactions = 1006` and `imbalanceCount = 0`
+- Reconciliation repository, service, and flow tests
 
-Next: reconciliation state and dead-letter handling.
+Next: richer reconciliation details and dead-letter handling.
 
 ## Local Development
 
@@ -377,9 +384,9 @@ gradle test
 - Spring Boot Kafka consumer foundation
 - PayFlow consumer for `payment.captured` and `payment.settled`
 - Consumed event audit table
-- Projection/reconciliation state
+- Ledger balance reconciliation report
+- Richer reconciliation detail payloads
 - Dead-letter routing and replay
-- Reconciliation jobs with structured report output
 - Scheduled reconciliation
 - Dead-letter replay tooling
 

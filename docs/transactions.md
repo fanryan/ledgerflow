@@ -1,6 +1,6 @@
 # Transactions
 
-This document explains the current LedgerFlow transaction foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, recording `FAILED` rows for insufficient funds, reversing posted transactions with offsetting ledger entries, handling concurrent balance updates safely, writing transactional outbox rows for posted transaction events, publishing those outbox events to Kafka through a scheduled claim-based publisher, and consuming `ledger.events` with a log-only Kafka consumer.
+This document explains the current LedgerFlow transaction foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, recording `FAILED` rows for insufficient funds, reversing posted transactions with offsetting ledger entries, handling concurrent balance updates safely, writing transactional outbox rows for posted transaction events, publishing those outbox events to Kafka through a scheduled claim-based publisher, and consuming `ledger.events` into an idempotent consumed-event audit table.
 
 The current implementation creates two balanced ledger entries per posted transaction: one for the user account and one for the seeded USD settlement system account.
 
@@ -15,6 +15,7 @@ The Spring Boot API currently supports:
 - `idempotency_keys` table through Flyway migration `V7__create_idempotency_keys_table.sql`.
 - Reversal metadata through Flyway migration `V8__add_transaction_reversal_fields.sql`.
 - `outbox_events` table through Flyway migration `V9__create_outbox_events_table.sql`.
+- `consumed_ledger_events` table through Flyway migration `V10__create_consumed_ledger_events_table.sql`.
 - Authenticated `POST /transactions`.
 - Authenticated `GET /transactions`.
 - Authenticated `POST /transactions/{transactionId}/reverse`.
@@ -47,8 +48,10 @@ The Spring Boot API currently supports:
 - Stale outbox claim recovery through `locked_until`.
 - Scheduled Spring Boot outbox publisher.
 - Kafka publishing to topic `ledger.events`.
-- Log-only Kafka consumption from topic `ledger.events`.
-- Manual verification that published `TRANSACTION_POSTED` events are consumed by `LedgerEventsConsumer`.
+- Kafka consumption from topic `ledger.events`.
+- Consumed `TRANSACTION_POSTED` events are recorded in `consumed_ledger_events`.
+- Duplicate consumed events are ignored with `(transaction_id, event_type)` uniqueness.
+- Manual verification that published `TRANSACTION_POSTED` events are consumed and persisted by `LedgerEventsConsumer`.
 - Successful publishes mark rows as `PUBLISHED`.
 - Failed publishes mark rows as `FAILED` with retry metadata.
 - USD settlement system account seeded by `V6__seed_system_account.sql`.
@@ -59,14 +62,15 @@ The Spring Boot API currently supports:
 - Outbox event creation test proving a posted transaction creates a pending outbox row.
 - Outbox repository tests for claim, publish, and failed-publish transitions.
 - Outbox publisher service tests for successful Kafka publish and failed Kafka publish handling.
-- Kafka consumer test proving the current event payload can be accepted by `LedgerEventsConsumer`.
+- Kafka consumer test proving the current event payload is passed to the consumed-event repository.
+- Consumed event repository tests proving first insert succeeds and duplicate insert is ignored.
 
 ### Not Implemented Yet
 
 These are planned, not implemented:
 
 - Richer system-account modeling beyond the seeded USD settlement account.
-- Consumer side effects, projections, reconciliation state, and dead-letter handling.
+- Projections, reconciliation state, and dead-letter handling.
 - Reconciliation.
 
 ## 2. Endpoint
@@ -580,6 +584,30 @@ Important indexes:
 
 The split publishable/stale-claim indexes reflect two different publisher queries: normal queue polling and crashed-claim recovery.
 
+### `consumed_ledger_events`
+
+Created by:
+
+```text
+services/ledger-api/src/main/resources/db/migration/V10__create_consumed_ledger_events_table.sql
+```
+
+Important columns:
+
+- `id`: consumed-event audit row primary key.
+- `event_type`: event name, currently `TRANSACTION_POSTED`.
+- `transaction_id`: transaction id parsed from the consumed event payload.
+- `payload`: original consumed event payload stored as JSONB.
+- `consumed_at`: timestamp when the consumer recorded the event.
+
+Important constraint:
+
+```text
+UNIQUE (transaction_id, event_type)
+```
+
+That uniqueness makes duplicate Kafka delivery safe for the current consumer side effect. If Kafka redelivers the same `TRANSACTION_POSTED` event, the insert uses `ON CONFLICT DO NOTHING` and the table still contains only one audit row.
+
 ## 11. Outbox Publisher Flow
 
 The scheduled outbox publisher turns durable database events into Kafka messages.
@@ -629,7 +657,7 @@ Tests disable the scheduler in `src/test/resources/application.yml` so Kafka pub
 
 ## 12. Kafka Consumer Flow
 
-The current consumer is intentionally small. It proves that the application can receive events from Kafka without adding projection or reconciliation side effects yet.
+The current consumer records an idempotent audit row for consumed ledger events. It is still intentionally small: it proves that the application can receive events from Kafka and perform a retry-safe database side effect without adding projection or reconciliation logic yet.
 
 ```text
 Kafka topic: ledger.events
@@ -637,14 +665,20 @@ Kafka topic: ledger.events
   v
 LedgerEventsConsumer.consume(payload)
   |
+  +--> parse transactionId from JSON
+  +--> eventType = TRANSACTION_POSTED
+  +--> ConsumedLedgerEventRepository.insertIfNotExists(...)
+  |
   v
-log "Consumed ledger event: ..."
+consumed_ledger_events row
 ```
 
 Current behavior:
 
 - consumes string payloads from `ledger.events`
-- logs the raw `TRANSACTION_POSTED` JSON payload
+- parses `transactionId` from the raw `TRANSACTION_POSTED` JSON payload
+- inserts one row into `consumed_ledger_events`
+- ignores duplicate `(transaction_id, event_type)` deliveries
 - does not write projections
 - does not update reconciliation state
 - does not write dead-letter records
@@ -798,13 +832,33 @@ ledgerflow.outbox.publisher.enabled=false
 
 Listens to Kafka topic `ledger.events`.
 
-Current behavior is log-only:
+Current behavior:
 
 ```text
-Consumed ledger event: <payload>
+payload -> parse transactionId -> insert consumed_ledger_events
 ```
 
-This confirms end-to-end publish/consume wiring. It is not yet a projection, reconciliation, or dead-letter implementation.
+Duplicate consumed events are ignored by the repository through `ON CONFLICT DO NOTHING`.
+
+This confirms end-to-end publish/consume wiring plus a small idempotent consumer side effect. It is not yet a projection, reconciliation, or dead-letter implementation.
+
+### `ConsumedLedgerEvent.java`
+
+Data carrier for one consumed event audit row.
+
+### `ConsumedLedgerEventRepository.java`
+
+Uses `NamedParameterJdbcTemplate` for the `consumed_ledger_events` table.
+
+It uses explicit SQL because:
+
+- `payload` is PostgreSQL `jsonb`, so writes cast `:payload` with `CAST(:payload AS jsonb)`.
+- duplicate delivery is handled atomically with `ON CONFLICT (transaction_id, event_type) DO NOTHING`.
+
+Current methods:
+
+- `insertIfNotExists(...)`
+- `countByTransactionIdAndEventType(...)`
 
 ### `OutboxEvent.java`
 
@@ -1401,14 +1455,17 @@ That response means the client should reload state and decide whether to retry. 
     The publisher marks the event `FAILED`, increments `attempts`, stores `last_error`, and schedules `next_attempt_at`.
 
 37. **What does the current Kafka consumer do?**  
-    It consumes payloads from `ledger.events` and logs them. It does not yet write projections, reconciliation state, or dead-letter records.
+    It consumes payloads from `ledger.events`, parses `transactionId`, and records an idempotent audit row in `consumed_ledger_events`.
 
-38. **Why keep the first consumer log-only?**  
-    It proves end-to-end Kafka wiring before adding new state changes that must be made idempotent and retry-safe.
+38. **How does the consumer handle duplicate Kafka delivery?**  
+    `ConsumedLedgerEventRepository` inserts with `ON CONFLICT (transaction_id, event_type) DO NOTHING`, so repeated delivery does not create duplicate audit rows.
+
+39. **Why keep the first consumer side effect small?**  
+    It proves end-to-end Kafka wiring and retry-safe consumption before adding projections, reconciliation state, or dead-letter handling.
 
 ## 17. Checklist Before Moving On
 
-Before moving on to consumer side effects and reconciliation, be able to explain:
+Before moving on to reconciliation state and dead-letter handling, be able to explain:
 
 - [ ] Why `POST /transactions` requires authentication.
 - [ ] Why `GET /transactions` is scoped to the authenticated user.
@@ -1445,5 +1502,7 @@ Before moving on to consumer side effects and reconciliation, be able to explain
 - [ ] How failed publishes become `FAILED` and retryable.
 - [ ] Why the test profile disables the scheduled publisher.
 - [ ] What `LedgerEventsConsumer` consumes today.
-- [ ] Why the first consumer is log-only.
+- [ ] What `consumed_ledger_events` stores.
+- [ ] Why duplicate consumed events are ignored.
+- [ ] Why the first consumer side effect is intentionally small.
 - [ ] Why tests disable Kafka listener auto-startup.

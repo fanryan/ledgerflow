@@ -63,13 +63,15 @@ Current implemented Spring Boot slice:
 - claim-based outbox publisher uses `FOR UPDATE SKIP LOCKED`
 - outbox claims use `locked_until` for stale claim recovery
 - scheduled Spring Boot publisher sends outbox payloads to Kafka topic `ledger.events`
-- log-only Spring Kafka consumer reads `ledger.events`
-- consumed `TRANSACTION_POSTED` events have been manually verified in application logs
+- Spring Kafka consumer reads `ledger.events`
+- `consumed_ledger_events` table records consumed `TRANSACTION_POSTED` events
+- consumed event inserts are idempotent through `(transaction_id, event_type)` uniqueness
+- consumed `TRANSACTION_POSTED` events have been manually verified in PostgreSQL
 - published events are marked `PUBLISHED`
 - failed publishes are marked `FAILED` with retry metadata
-- outbox repository, publisher service, and consumer tests cover claim, publish, failure, and basic consumption paths
+- outbox repository, publisher service, consumer, and consumed-event repository tests cover claim, publish, failure, consumption, and duplicate-consumption paths
 
-Planned scope includes richer system-account modeling, downstream consumer side effects, PayFlow event consumption, balance snapshots, reconciliation, and dead-letter replay.
+Planned scope includes richer system-account modeling, PayFlow event consumption, balance snapshots, reconciliation, and dead-letter replay.
 
 ## Architecture Rules
 
@@ -120,7 +122,7 @@ gradle bootRun
 - Keep asynchronous LedgerFlow components inside the Spring Boot service unless the architecture is deliberately changed later.
 - Outbox publishing should read committed PostgreSQL outbox rows and publish them to Kafka.
 - Kafka consumers should be idempotent and retry-safe.
-- Current `LedgerEventsConsumer` is log-only; do not treat it as a projection, reconciliation, or dead-letter implementation.
+- Current `LedgerEventsConsumer` records consumed events for audit/idempotency; do not treat it as a projection, reconciliation, or dead-letter implementation.
 - Reconciliation should compare authoritative PostgreSQL state against derived or external state.
 - Dead-letter replay should be explicit, auditable, and safe to retry.
 
@@ -201,7 +203,7 @@ docker compose config
 - Transaction tests should cover authentication, listing by current user, idempotency, ownership checks, validation, currency mismatch, balance updates, and insufficient funds.
 - Reversal tests should cover offsetting transaction creation, balance restoration, double-reversal rejection, required reason validation, and idempotency.
 - Concurrency tests should cover simultaneous withdrawals and verify the final account balance cannot go negative.
-- Outbox tests should verify posted transactions create pending outbox events, repository claim transitions, successful publish marking, failed publish retry metadata, and basic consumer payload handling.
+- Outbox tests should verify posted transactions create pending outbox events, repository claim transitions, successful publish marking, failed publish retry metadata, consumer payload handling, and duplicate consumed-event safety.
 - Ledger posting tests should cover ledger entry creation, idempotent retry safety, and balanced debits/credits.
 
 ## Local Development Commands

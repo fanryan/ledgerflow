@@ -112,6 +112,7 @@ Detailed implementation notes live in:
 - [Reconciliation](docs/reconciliation.md)
 - [Dead-Letter Replay](docs/dead-letter-replay.md)
 - [Testing](docs/testing.md)
+- [Architecture Tradeoffs](docs/architecture-tradeoffs.md)
 
 ## Repository Structure
 

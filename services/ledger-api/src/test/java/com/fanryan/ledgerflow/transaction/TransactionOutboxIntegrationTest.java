@@ -12,11 +12,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fanryan.ledgerflow.account.Account;
 import com.fanryan.ledgerflow.account.AccountRepository;
 import com.fanryan.ledgerflow.account.AccountStatus;
+import com.fanryan.ledgerflow.outbox.OutboxEvent;
+import com.fanryan.ledgerflow.outbox.OutboxEventRepository;
+import com.fanryan.ledgerflow.outbox.OutboxEventStatus;
 import com.fanryan.ledgerflow.outbox.OutboxPublisherService;
 import com.fanryan.ledgerflow.support.IntegrationTestSupport;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,6 +36,9 @@ class TransactionOutboxIntegrationTest extends IntegrationTestSupport {
 
     @Autowired
     private OutboxPublisherService outboxPublisherService;
+
+    @Autowired
+    private OutboxEventRepository outboxEventRepository;
 
     @Autowired
     private KafkaTemplate<String, String> kafkaTemplate;
@@ -68,9 +75,7 @@ class TransactionOutboxIntegrationTest extends IntegrationTestSupport {
 
         assertThat(transaction.status()).isEqualTo(TransactionStatus.POSTED);
 
-        int published = outboxPublisherService.publishBatch();
-
-        assertThat(published).isGreaterThanOrEqualTo(1);
+        publishUntilOutboxEventIsPublished(transaction.id());
 
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(
                 Map.of(
@@ -83,7 +88,9 @@ class TransactionOutboxIntegrationTest extends IntegrationTestSupport {
                         ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class
                 )
         )) {
-            consumer.subscribe(List.of("ledger.events"));
+            TopicPartition ledgerEventsPartition = new TopicPartition("ledger.events", 0);
+            consumer.assign(List.of(ledgerEventsPartition));
+            consumer.seekToBeginning(List.of(ledgerEventsPartition));
 
             String consumedPayload = pollForPayloadContaining(
                     consumer,
@@ -94,6 +101,25 @@ class TransactionOutboxIntegrationTest extends IntegrationTestSupport {
             assertThat(objectMapper.readTree(consumedPayload).get("status").asText())
                     .isEqualTo("POSTED");
         }
+    }
+
+    private void publishUntilOutboxEventIsPublished(UUID aggregateId) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+
+        while (System.nanoTime() < deadline) {
+            outboxPublisherService.publishBatch();
+
+            boolean published = outboxEventRepository.findByAggregateId(aggregateId)
+                    .stream()
+                    .map(OutboxEvent::status)
+                    .anyMatch(OutboxEventStatus.PUBLISHED::equals);
+
+            if (published) {
+                return;
+            }
+        }
+
+        throw new AssertionError("Outbox event was not published for aggregate: " + aggregateId);
     }
 
     private String pollForPayloadContaining(

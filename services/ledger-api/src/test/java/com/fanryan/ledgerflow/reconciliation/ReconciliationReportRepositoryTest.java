@@ -10,6 +10,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+
+import com.fanryan.ledgerflow.account.Account;
+import com.fanryan.ledgerflow.account.AccountRepository;
+import com.fanryan.ledgerflow.account.AccountStatus;
 import com.fanryan.ledgerflow.support.IntegrationTestSupport;
 
 class ReconciliationReportRepositoryTest extends IntegrationTestSupport {
@@ -19,6 +23,9 @@ class ReconciliationReportRepositoryTest extends IntegrationTestSupport {
 
     @Autowired
     private NamedParameterJdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private AccountRepository accountRepository;
 
     @BeforeEach
     void clearReports() {
@@ -49,5 +56,27 @@ class ReconciliationReportRepositoryTest extends IntegrationTestSupport {
         int count = repository.countById(reportId);
 
         assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    void countAccountBalanceMismatchesFindsStoredBalanceDrift() {
+        UUID ownerUserId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        OffsetDateTime now = OffsetDateTime.now();
+        long beforeMismatchCount = repository.countAccountBalanceMismatches();
+        long beforeUserAccountCount = repository.countUserAccounts();
+
+        accountRepository.save(new Account(
+                UUID.randomUUID(),
+                ownerUserId,
+                "USD",
+                AccountStatus.ACTIVE,
+                123,
+                0,
+                now,
+                now
+        ));
+
+        assertThat(repository.countUserAccounts()).isEqualTo(beforeUserAccountCount + 1);
+        assertThat(repository.countAccountBalanceMismatches()).isEqualTo(beforeMismatchCount + 1);
     }
 }

@@ -44,4 +44,43 @@ class ReconciliationServiceTest {
 
         verify(repository).save(report);
     }
+
+    @Test
+    void runAccountBalanceCheckReturnsPassedWhenNoMismatchesExist() {
+        ReconciliationReportRepository repository = mock(ReconciliationReportRepository.class);
+
+        when(repository.countUserAccounts()).thenReturn(3L);
+        when(repository.countAccountBalanceMismatches()).thenReturn(0L);
+
+        ReconciliationService service = new ReconciliationService(repository);
+
+        ReconciliationReport report = service.runAccountBalanceCheck();
+
+        assertThat(report.reportType()).isEqualTo("ACCOUNT_BALANCE_CHECK");
+        assertThat(report.status()).isEqualTo(ReconciliationReportStatus.PASSED);
+        assertThat(report.checkedTransactions()).isEqualTo(3);
+        assertThat(report.imbalanceCount()).isZero();
+        assertThat(report.details()).contains("account_balance_equals_ledger_derived_balance");
+
+        verify(repository).save(report);
+    }
+
+    @Test
+    void runAccountBalanceCheckReturnsFailedWhenMismatchesExist() {
+        ReconciliationReportRepository repository = mock(ReconciliationReportRepository.class);
+
+        when(repository.countUserAccounts()).thenReturn(3L);
+        when(repository.countAccountBalanceMismatches()).thenReturn(1L);
+
+        ReconciliationService service = new ReconciliationService(repository);
+
+        ReconciliationReport report = service.runAccountBalanceCheck();
+
+        assertThat(report.reportType()).isEqualTo("ACCOUNT_BALANCE_CHECK");
+        assertThat(report.status()).isEqualTo(ReconciliationReportStatus.FAILED);
+        assertThat(report.checkedTransactions()).isEqualTo(3);
+        assertThat(report.imbalanceCount()).isEqualTo(1);
+
+        verify(repository).save(report);
+    }
 }

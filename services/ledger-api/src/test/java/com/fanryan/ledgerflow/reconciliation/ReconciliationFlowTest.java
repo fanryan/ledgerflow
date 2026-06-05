@@ -40,6 +40,28 @@ class ReconciliationFlowTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.completedAt").exists());
     }
 
+    @Test
+    void accountBalanceCheckRequiresAuthentication() throws Exception {
+        mockMvc.perform(post("/reconciliation/account-balance-check"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void accountBalanceCheckCreatesReport() throws Exception {
+        String accessToken = login();
+
+        mockMvc.perform(post("/reconciliation/account-balance-check")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.reportType").value("ACCOUNT_BALANCE_CHECK"))
+                .andExpect(jsonPath("$.status").exists())
+                .andExpect(jsonPath("$.checkedTransactions").exists())
+                .andExpect(jsonPath("$.imbalanceCount").exists())
+                .andExpect(jsonPath("$.details").exists())
+                .andExpect(jsonPath("$.startedAt").exists())
+                .andExpect(jsonPath("$.completedAt").exists());
+    }
+
     private String login() throws Exception {
         String response = mockMvc.perform(post("/auth/login")
                         .contentType(APPLICATION_JSON)

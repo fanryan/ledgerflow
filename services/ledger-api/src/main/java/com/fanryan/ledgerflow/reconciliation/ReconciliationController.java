@@ -19,4 +19,10 @@ public class ReconciliationController {
     public ReconciliationReport runLedgerBalanceCheck() {
         return reconciliationService.runLedgerBalanceCheck();
     }
+
+    @PostMapping("/reconciliation/account-balance-check")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ReconciliationReport runAccountBalanceCheck() {
+        return reconciliationService.runAccountBalanceCheck();
+    }
 }

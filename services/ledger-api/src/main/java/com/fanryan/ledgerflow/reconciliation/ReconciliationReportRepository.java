@@ -3,6 +3,7 @@ package com.fanryan.ledgerflow.reconciliation;
 import java.util.Map;
 import java.util.UUID;
 
+import com.fanryan.ledgerflow.ledger.SystemAccounts;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -103,6 +104,52 @@ public class ReconciliationReportRepository {
                 """;
 
         Long count = jdbcTemplate.queryForObject(sql, Map.of(), Long.class);
+
+        return count == null ? 0 : count;
+    }
+
+    public long countUserAccounts() {
+        String sql = """
+                SELECT COUNT(*)
+                FROM accounts
+                WHERE id <> :systemAccountId
+                """;
+
+        Long count = jdbcTemplate.queryForObject(
+                sql,
+                Map.of("systemAccountId", SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID),
+                Long.class
+        );
+
+        return count == null ? 0 : count;
+    }
+
+    public long countAccountBalanceMismatches() {
+        String sql = """
+                SELECT COUNT(*)
+                FROM accounts account
+                LEFT JOIN (
+                    SELECT
+                        account_id,
+                        SUM(
+                            CASE
+                                WHEN direction = 'CREDIT' THEN amount_minor
+                                WHEN direction = 'DEBIT' THEN -amount_minor
+                                ELSE 0
+                            END
+                        ) AS ledger_balance_minor
+                    FROM ledger_entries
+                    GROUP BY account_id
+                ) ledger_balance ON ledger_balance.account_id = account.id
+                WHERE account.id <> :systemAccountId
+                  AND account.balance_minor <> COALESCE(ledger_balance.ledger_balance_minor, 0)
+                """;
+
+        Long count = jdbcTemplate.queryForObject(
+                sql,
+                Map.of("systemAccountId", SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID),
+                Long.class
+        );
 
         return count == null ? 0 : count;
     }

@@ -32,20 +32,17 @@ public class PayCoreConsumer {
             groupId = "${paycore.kafka.consumer-group-id:paycore-consumer}"
     )
     public void consumePaymentCaptured(String payload) {
-        PayCorePaymentCapturedPayload event = parsePaymentCaptured(payload);
+        PayCorePaymentCapturedPayload event = parse(payload, PayCorePaymentCapturedPayload.class);
 
-        validate(event);
+        validatePaymentCaptured(event);
 
-        transactionService.submitTransaction(
-                UUID.fromString(event.ownerUserId()),
+        submitDeposit(
+                event.ownerUserId(),
                 event.eventId(),
-                new CreateTransactionRequest(
-                        UUID.fromString(event.merchantAccountId()),
-                        TransactionType.DEPOSIT,
-                        event.amountMinor(),
-                        event.currency(),
-                        "PayCore payment captured: " + event.paymentId()
-                )
+                event.merchantAccountId(),
+                event.amountMinor(),
+                event.currency(),
+                "PayCore payment captured: " + event.paymentId()
         );
 
         log.info(
@@ -58,36 +55,114 @@ public class PayCoreConsumer {
         );
     }
 
-    private PayCorePaymentCapturedPayload parsePaymentCaptured(String payload) {
+    @KafkaListener(
+            topics = "payment.settled",
+            groupId = "${paycore.kafka.consumer-group-id:paycore-consumer}"
+    )
+    public void consumePaymentSettled(String payload) {
+        PayCorePaymentSettledPayload event = parse(payload, PayCorePaymentSettledPayload.class);
+
+        validatePaymentSettled(event);
+
+        submitDeposit(
+                event.ownerUserId(),
+                event.eventId(),
+                event.merchantAccountId(),
+                event.amountMinor(),
+                event.currency(),
+                "PayCore payment settled: " + event.paymentId()
+        );
+
+        log.info(
+                "Posted PayCore payment.settled eventId={} paymentId={} merchantAccountId={} amountMinor={} currency={}",
+                event.eventId(),
+                event.paymentId(),
+                event.merchantAccountId(),
+                event.amountMinor(),
+                event.currency()
+        );
+    }
+
+    private void submitDeposit(
+            String ownerUserId,
+            String eventId,
+            String merchantAccountId,
+            long amountMinor,
+            String currency,
+            String description
+    ) {
+        transactionService.submitTransaction(
+                UUID.fromString(ownerUserId),
+                eventId,
+                new CreateTransactionRequest(
+                        UUID.fromString(merchantAccountId),
+                        TransactionType.DEPOSIT,
+                        amountMinor,
+                        currency,
+                        description
+                )
+        );
+    }
+
+    private <T> T parse(String payload, Class<T> eventType) {
         try {
-            return objectMapper.readValue(payload, PayCorePaymentCapturedPayload.class);
+            return objectMapper.readValue(payload, eventType);
         } catch (Exception exception) {
-            throw new IllegalArgumentException("Invalid payment.captured payload", exception);
+            throw new IllegalArgumentException("Invalid PayCore event payload", exception);
         }
     }
 
-    private void validate(PayCorePaymentCapturedPayload event) {
-        if (event.eventId() == null || event.eventId().isBlank()) {
+    private void validatePaymentCaptured(PayCorePaymentCapturedPayload event) {
+        validateCommonFields(
+                event.eventId(),
+                event.paymentId(),
+                event.ownerUserId(),
+                event.merchantAccountId(),
+                event.amountMinor(),
+                event.currency()
+        );
+    }
+
+    private void validatePaymentSettled(PayCorePaymentSettledPayload event) {
+        validateCommonFields(
+                event.eventId(),
+                event.paymentId(),
+                event.ownerUserId(),
+                event.merchantAccountId(),
+                event.amountMinor(),
+                event.currency()
+        );
+    }
+
+    private void validateCommonFields(
+            String eventId,
+            String paymentId,
+            String ownerUserId,
+            String merchantAccountId,
+            long amountMinor,
+            String currency
+    ) {
+        if (eventId == null || eventId.isBlank()) {
             throw new IllegalArgumentException("PayCore event id is required");
         }
 
-        if (event.paymentId() == null || event.paymentId().isBlank()) {
+        if (paymentId == null || paymentId.isBlank()) {
             throw new IllegalArgumentException("PayCore payment id is required");
         }
 
-        if (event.ownerUserId() == null || event.ownerUserId().isBlank()) {
+        if (ownerUserId == null || ownerUserId.isBlank()) {
             throw new IllegalArgumentException("PayCore owner user id is required");
         }
 
-        if (event.merchantAccountId() == null || event.merchantAccountId().isBlank()) {
+        if (merchantAccountId == null || merchantAccountId.isBlank()) {
             throw new IllegalArgumentException("PayCore merchant account id is required");
         }
 
-        if (event.amountMinor() <= 0) {
+        if (amountMinor <= 0) {
             throw new IllegalArgumentException("PayCore amount must be greater than zero");
         }
 
-        if (event.currency() == null || !event.currency().matches("[A-Z]{3}")) {
+        if (currency == null || !currency.matches("[A-Z]{3}")) {
             throw new IllegalArgumentException("PayCore currency must be a 3-letter uppercase code");
         }
     }

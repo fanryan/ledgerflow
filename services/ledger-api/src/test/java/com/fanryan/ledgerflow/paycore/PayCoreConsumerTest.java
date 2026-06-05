@@ -43,4 +43,34 @@ class PayCoreConsumerTest {
                 any(CreateTransactionRequest.class)
         );
     }
+
+    @Test
+    void consumePaymentSettledPostsLedgerTransaction() {
+        TransactionService transactionService = mock(TransactionService.class);
+        PayCoreConsumer consumer = new PayCoreConsumer(
+                new ObjectMapper(),
+                transactionService
+        );
+
+        UUID ownerUserId = UUID.randomUUID();
+        UUID merchantAccountId = UUID.randomUUID();
+
+        consumer.consumePaymentSettled("""
+                {
+                  "eventId": "evt_settle_001",
+                  "paymentId": "pay_001",
+                  "ownerUserId": "%s",
+                  "merchantAccountId": "%s",
+                  "amountMinor": 2500,
+                  "currency": "USD",
+                  "settledAt": "2026-06-05T10:05:00Z"
+                }
+                """.formatted(ownerUserId, merchantAccountId));
+
+        verify(transactionService).submitTransaction(
+                eq(ownerUserId),
+                eq("evt_settle_001"),
+                any(CreateTransactionRequest.class)
+        );
+    }
 }

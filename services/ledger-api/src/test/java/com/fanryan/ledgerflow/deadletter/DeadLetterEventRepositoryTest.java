@@ -10,9 +10,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
-@SpringBootTest
-@ActiveProfiles("test")
-class DeadLetterEventRepositoryTest {
+import com.fanryan.ledgerflow.support.IntegrationTestSupport;
+
+class DeadLetterEventRepositoryTest extends IntegrationTestSupport {
 
     @Autowired
     private DeadLetterEventRepository deadLetterEventRepository;

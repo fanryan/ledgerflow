@@ -80,13 +80,17 @@ The Spring Boot API currently supports:
 - Dead-letter replay routes PayCore dead letters back through the matching consumer method.
 - Replayed dead-letter rows are marked `REPLAYED`.
 - Dead-letter repository, replay service, and flow tests.
+- Testcontainers PostgreSQL migration smoke test.
+- Testcontainers Kafka test proving outbox rows publish to `ledger.events`.
+- Testcontainers end-to-end test proving a posted transaction creates an outbox event that publishes to Kafka.
+- Testcontainers PayCore tests proving `payment.captured` and `payment.settled` events create LedgerFlow transactions.
 
 ### Not Implemented Yet
 
 These are planned, not implemented:
 
 - Richer system-account modeling beyond the seeded USD settlement account.
-- Projections, richer reconciliation details, scheduled reconciliation, scheduled dead-letter replay, and Testcontainers Kafka integration tests.
+- Projections, richer reconciliation details, scheduled reconciliation, scheduled dead-letter replay, balance snapshots, and broader integration coverage.
 
 ## 2. Endpoint
 
@@ -1730,3 +1734,6 @@ Before moving on to richer reconciliation details and dead-letter handling, be a
 - [ ] How invalid PayCore events are stored in `dead_letter_events`.
 - [ ] How `POST /admin/dead-letter/replay` routes pending rows.
 - [ ] Why replay marks rows as `REPLAYED`.
+- [ ] What the Testcontainers PostgreSQL migration test proves.
+- [ ] What the Testcontainers Kafka outbox tests prove.
+- [ ] What the Testcontainers PayCore consumer tests prove.

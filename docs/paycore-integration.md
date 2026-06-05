@@ -22,13 +22,13 @@ The implemented slice consumes PayCore Kafka events and turns them into idempote
 - Dead-letter replay can route pending PayCore events back through the matching consumer.
 - Unit tests for captured and settled event handling.
 - Unit tests proving invalid captured and settled events are stored as dead letters.
+- Testcontainers Kafka integration tests for `payment.captured` and `payment.settled`.
 - Manual verification that captured and settled events are consumed and posted successfully.
 
 ### Not Implemented Yet
 
 - External PayCore merchant id to LedgerFlow account mapping.
 - Separate settlement-clearing account model.
-- Testcontainers-based Kafka integration tests.
 
 ## 2. Runtime Flow
 
@@ -269,7 +269,7 @@ That is enough to prove the important backend patterns:
 - dead-letter persistence for invalid events
 - admin-triggered dead-letter replay
 
-Future work can add richer settlement modeling, external id mapping, scheduled replay, and Testcontainers integration tests without changing the core rule that PostgreSQL remains the source of truth.
+Future work can add richer settlement modeling, external id mapping, and scheduled replay without changing the core rule that PostgreSQL remains the source of truth.
 
 ## 9. Interview Questions
 
@@ -286,7 +286,7 @@ Future work can add richer settlement modeling, external id mapping, scheduled r
    LedgerFlow detects a request hash mismatch and rejects it as an idempotency conflict.
 
 5. **Why is this consumer still not a full production integration?**  
-   It does not yet include external id mapping, scheduled replay, or Testcontainers Kafka integration tests.
+   It does not yet include external id mapping, richer settlement accounting, or scheduled replay.
 
 6. **What happens when a PayCore event is invalid?**  
    The consumer stores the raw payload and error message in `dead_letter_events` with status `PENDING`.
@@ -304,4 +304,5 @@ Future work can add richer settlement modeling, external id mapping, scheduled r
 - [ ] Explain why the consumer calls `TransactionService`.
 - [ ] Explain how invalid PayCore events become dead-letter rows.
 - [ ] Explain how pending dead-letter rows are replayed.
-- [ ] Explain what is still planned: external id mapping, scheduled replay, and Testcontainers tests.
+- [ ] Explain what the Testcontainers Kafka tests prove.
+- [ ] Explain what is still planned: external id mapping, richer settlement accounting, and scheduled replay.

@@ -40,3 +40,7 @@ ledgerflow:
     publisher:
       enabled: ${LEDGERFLOW_OUTBOX_PUBLISHER_ENABLED:true}
       fixed-delay-ms: 5000
+
+  paycore:
+    kafka:
+      consumer-group-id: paycore-consumer

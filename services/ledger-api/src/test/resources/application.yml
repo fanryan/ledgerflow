@@ -31,3 +31,7 @@ ledgerflow:
   outbox:
     publisher:
       enabled: false
+
+  paycore:
+    kafka:
+      consumer-group-id: paycore-consumer-test

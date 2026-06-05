@@ -297,7 +297,7 @@ Current entries balance between the user account and a seeded USD settlement sys
 Benefits:
 
 - Balances are explainable.
-- Reconciliation can detect imbalance.
+- Reconciliation can detect both debit/credit imbalance and stored-balance drift.
 - Reversals can be modeled cleanly.
 
 Costs:
@@ -307,7 +307,7 @@ Costs:
 
 **Interview Framing**
 
-> The account balance is a derived operational value, but ledger entries explain the movement. Double-entry gives a reconciliation invariant that balance-only updates do not.
+> The account balance is a derived operational value, but ledger entries explain the movement. Double-entry gives reconciliation invariants that balance-only updates do not: entries must balance, and stored user balances can be checked against ledger-derived balances.
 
 ## 8. Reversals: Append Instead Of Mutate
 

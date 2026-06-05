@@ -65,8 +65,10 @@ The Spring Boot API currently supports:
 - Kafka consumer test proving the current event payload is passed to the consumed-event repository.
 - Consumed event repository tests proving first insert succeeds and duplicate insert is ignored.
 - Ledger balance reconciliation checks posted transactions for debit/credit imbalances.
+- Account balance reconciliation checks stored user account balances against ledger-derived balances.
 - Reconciliation reports are persisted in `reconciliation_reports`.
 - Authenticated `POST /reconciliation/ledger-balance-check` endpoint.
+- Authenticated `POST /reconciliation/account-balance-check` endpoint.
 - Reconciliation repository, service, and flow tests.
 - PayCore consumer for Kafka topic `payment.captured`.
 - PayCore consumer for Kafka topic `payment.settled`.
@@ -90,7 +92,7 @@ The Spring Boot API currently supports:
 These are planned, not implemented:
 
 - Richer system-account modeling beyond the seeded USD settlement account.
-- Projections, richer reconciliation details, scheduled reconciliation, scheduled dead-letter replay, balance snapshots, and broader integration coverage.
+- Projections, richer reconciliation details, scheduled reconciliation, scheduled dead-letter replay, balance snapshots, and broader external-state comparison.
 
 ## 2. Endpoint
 

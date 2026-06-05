@@ -164,11 +164,11 @@ Implemented slices:
 - Transactional outbox with claim-based publishing to Kafka.
 - Kafka consumption for internal ledger events with idempotent consumed-event auditing.
 - PayCore event ingestion for `payment.captured` and `payment.settled`, using PayCore `eventId` as the transaction idempotency key.
-- Ledger balance reconciliation with persisted report summaries.
+- Ledger and account-balance reconciliation with persisted report summaries.
 - Dead-letter persistence and authenticated replay for failed PayCore events.
 - Focused unit, flow, and Testcontainers integration tests across auth, accounts, transactions, outbox, Kafka consumers, reconciliation, and dead-letter replay.
 
-Next: balance snapshots and broader reconciliation coverage.
+Next: wrap-up polish, final verification, and resume/interview documentation.
 
 ## Local Development
 

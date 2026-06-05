@@ -1,6 +1,6 @@
 # Reconciliation
 
-This document explains the current LedgerFlow reconciliation foundation. The implemented slice checks whether posted transactions have balanced ledger entries and stores a reconciliation report.
+This document explains the current LedgerFlow reconciliation foundation. The implemented checks validate both double-entry ledger balance and stored account balance drift, then persist reconciliation reports for auditability.
 
 ## Current Scope
 
@@ -8,20 +8,24 @@ Implemented:
 
 - `reconciliation_reports` table through `V11__create_reconciliation_reports_table.sql`.
 - Authenticated `POST /reconciliation/ledger-balance-check`.
+- Authenticated `POST /reconciliation/account-balance-check`.
 - `ReconciliationService.runLedgerBalanceCheck()`.
+- `ReconciliationService.runAccountBalanceCheck()`.
 - `ReconciliationReportRepository`.
 - `ReconciliationReport` and `ReconciliationReportStatus`.
 - Report persistence with JSONB `details`.
+- Ledger-entry imbalance detection per posted transaction.
+- Account balance mismatch detection comparing `accounts.balance_minor` against ledger-derived balances.
 - Tests for repository persistence, service pass/fail decisions, endpoint authentication, and endpoint report creation.
-- Manual verification showing `PASSED` with `checkedTransactions = 1006` and `imbalanceCount = 0`.
+- Manual verification showing `LEDGER_BALANCE_CHECK` passed with `checkedTransactions = 1006` and `imbalanceCount = 0`.
 
 Not implemented yet:
 
 - Scheduled reconciliation.
 - Listing historical reconciliation reports.
-- Returning imbalanced transaction ids in report details.
-- Comparing PostgreSQL ledger state against external or derived systems.
-- Dead-letter replay.
+- Returning imbalanced transaction ids or mismatched account ids in report details.
+- Comparing PostgreSQL ledger state against external systems.
+- Balance snapshots.
 
 ## Runtime Flow
 
@@ -29,6 +33,7 @@ Not implemented yet:
 Client
   |
   | POST /reconciliation/ledger-balance-check
+  | POST /reconciliation/account-balance-check
   | Authorization: Bearer <access_token>
   v
 ReconciliationController
@@ -36,8 +41,9 @@ ReconciliationController
   v
 ReconciliationService
   |
-  +--> count posted transactions
-  +--> count transactions whose ledger entries do not balance
+  +--> run requested reconciliation query
+  +--> count checked items
+  +--> count imbalances or mismatches
   +--> create PASSED or FAILED report
   |
   v
@@ -47,7 +53,7 @@ ReconciliationReportRepository
 PostgreSQL reconciliation_reports
 ```
 
-The endpoint is protected by the default Spring Security rule:
+Both endpoints are protected by the default Spring Security rule:
 
 ```text
 anyRequest().authenticated()
@@ -55,7 +61,7 @@ anyRequest().authenticated()
 
 ## Ledger Balance Check
 
-The current check validates the double-entry invariant for each transaction:
+`POST /reconciliation/ledger-balance-check` validates the double-entry invariant for each transaction:
 
 ```text
 total DEBIT amount == total CREDIT amount
@@ -69,16 +75,11 @@ DEBIT amounts - CREDIT amounts
 
 If the result is not zero, that transaction is imbalanced.
 
-## Report Fields
+Current report type:
 
-`reconciliation_reports` stores:
-
-- `report_type`: currently `LEDGER_BALANCE_CHECK`.
-- `status`: `PASSED` or `FAILED`.
-- `checked_transactions`: number of posted transactions checked.
-- `imbalance_count`: number of imbalanced transactions.
-- `details`: JSONB metadata for the check.
-- `started_at` and `completed_at`: run timing.
+```text
+LEDGER_BALANCE_CHECK
+```
 
 Current details payload:
 
@@ -87,6 +88,48 @@ Current details payload:
   "check": "total_debits_equal_total_credits"
 }
 ```
+
+## Account Balance Check
+
+`POST /reconciliation/account-balance-check` validates that each normal user account's stored `accounts.balance_minor` matches the balance derived from `ledger_entries`.
+
+The derived balance calculation uses the user-account side of the ledger:
+
+```text
+CREDIT amount
+-DEBIT amount
+= ledger-derived account balance
+```
+
+The check excludes `SystemAccounts.USD_SETTLEMENT_ACCOUNT_ID`. The settlement account is currently used as the offsetting system account for deposits, withdrawals, and reversals, but its stored account balance is not updated as part of transaction posting. Excluding it keeps this check focused on user-facing account balance drift.
+
+Current report type:
+
+```text
+ACCOUNT_BALANCE_CHECK
+```
+
+Current details payload:
+
+```json
+{
+  "check": "account_balance_equals_ledger_derived_balance",
+  "excludedAccounts": ["USD_SETTLEMENT"]
+}
+```
+
+## Report Fields
+
+`reconciliation_reports` stores:
+
+- `report_type`: currently `LEDGER_BALANCE_CHECK` or `ACCOUNT_BALANCE_CHECK`.
+- `status`: `PASSED` or `FAILED`.
+- `checked_transactions`: count of checked items. For `LEDGER_BALANCE_CHECK`, this is posted transactions. For `ACCOUNT_BALANCE_CHECK`, this is checked user accounts.
+- `imbalance_count`: count of failed items. For `LEDGER_BALANCE_CHECK`, this is imbalanced transactions. For `ACCOUNT_BALANCE_CHECK`, this is account balance mismatches.
+- `details`: JSONB metadata for the check.
+- `started_at` and `completed_at`: run timing.
+
+The column names are transaction-oriented because the table started with the ledger balance check. The account-balance check reuses them as generic summary counts instead of adding schema churn late in the project.
 
 ## Manual Verification
 
@@ -113,15 +156,15 @@ That means all posted transactions in the local database had balanced ledger ent
 
 `ReconciliationController.java`
 
-Defines `POST /reconciliation/ledger-balance-check`.
+Defines `POST /reconciliation/ledger-balance-check` and `POST /reconciliation/account-balance-check`.
 
 `ReconciliationService.java`
 
-Coordinates the check, creates the report, and saves it transactionally.
+Coordinates each check, creates the report, and saves it transactionally.
 
 `ReconciliationReportRepository.java`
 
-Uses explicit SQL through `NamedParameterJdbcTemplate`. This is intentional because the repository writes JSONB report details and owns report-specific SQL queries.
+Uses explicit SQL through `NamedParameterJdbcTemplate`. This is intentional because the repository writes JSONB report details and owns report-specific aggregate queries.
 
 `ReconciliationReport.java`
 
@@ -140,8 +183,8 @@ Creates the report table and indexes for newest-first report lookup.
 1. **What does reconciliation mean here?**  
    It means independently checking ledger invariants after transaction posting.
 
-2. **What invariant is checked today?**  
-   Each posted transaction must have equal debit and credit totals.
+2. **What invariants are checked today?**  
+   Posted transactions must have equal debit and credit totals, and normal user account balances must match ledger-derived balances.
 
 3. **Why store reconciliation reports?**  
    They create an audit trail of when checks ran and what result they produced.
@@ -150,15 +193,20 @@ Creates the report table and indexes for newest-first report lookup.
    Report details can evolve without changing the main summary columns each time.
 
 5. **What does `imbalanceCount = 0` prove?**  
-   It proves no checked transaction violated the current debit/credit balance invariant.
+   It proves no checked item violated the selected reconciliation invariant.
 
-6. **What is still missing?**  
-   Richer details, scheduled runs, report listing, external-state comparison, and dead-letter replay.
+6. **Why exclude the settlement account from account-balance reconciliation?**  
+   LedgerFlow currently uses it as the offsetting account for double-entry rows, but only user account balances are updated in the transaction path.
+
+7. **What is still missing?**  
+   Richer mismatch details, scheduled runs, report listing, external-state comparison, and balance snapshots.
 
 ## Checklist
 
 - [ ] Explain why reconciliation is separate from transaction posting.
-- [ ] Explain how the ledger balance check calculates imbalances.
+- [ ] Explain how the ledger balance check calculates transaction imbalances.
+- [ ] Explain how the account balance check detects stored-balance drift.
+- [ ] Explain why the USD settlement system account is excluded today.
 - [ ] Explain why reports are persisted.
 - [ ] Explain what `PASSED` and `FAILED` mean.
-- [ ] Explain why this is only the first reconciliation slice.
+- [ ] Explain what richer reconciliation would add beyond the current summary counts.

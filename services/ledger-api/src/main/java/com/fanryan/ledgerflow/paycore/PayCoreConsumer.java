@@ -3,6 +3,7 @@ package com.fanryan.ledgerflow.paycore;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fanryan.ledgerflow.deadletter.DeadLetterEventRepository;
 import com.fanryan.ledgerflow.transaction.CreateTransactionRequest;
 import com.fanryan.ledgerflow.transaction.TransactionService;
 import com.fanryan.ledgerflow.transaction.TransactionType;
@@ -16,71 +17,85 @@ public class PayCoreConsumer {
 
     private static final Logger log = LoggerFactory.getLogger(PayCoreConsumer.class);
 
+    private static final String PAYMENT_CAPTURED_TOPIC = "payment.captured";
+    private static final String PAYMENT_SETTLED_TOPIC = "payment.settled";
+
     private final ObjectMapper objectMapper;
     private final TransactionService transactionService;
+    private final DeadLetterEventRepository deadLetterEventRepository;
 
     public PayCoreConsumer(
             ObjectMapper objectMapper,
-            TransactionService transactionService
+            TransactionService transactionService,
+            DeadLetterEventRepository deadLetterEventRepository
     ) {
         this.objectMapper = objectMapper;
         this.transactionService = transactionService;
+        this.deadLetterEventRepository = deadLetterEventRepository;
     }
 
     @KafkaListener(
-            topics = "payment.captured",
+            topics = PAYMENT_CAPTURED_TOPIC,
             groupId = "${paycore.kafka.consumer-group-id:paycore-consumer}"
     )
     public void consumePaymentCaptured(String payload) {
-        PayCorePaymentCapturedPayload event = parse(payload, PayCorePaymentCapturedPayload.class);
+        try {
+            PayCorePaymentCapturedPayload event = parse(payload, PayCorePaymentCapturedPayload.class);
 
-        validatePaymentCaptured(event);
+            validatePaymentCaptured(event);
 
-        submitDeposit(
-                event.ownerUserId(),
-                event.eventId(),
-                event.merchantAccountId(),
-                event.amountMinor(),
-                event.currency(),
-                "PayCore payment captured: " + event.paymentId()
-        );
+            submitDeposit(
+                    event.ownerUserId(),
+                    event.eventId(),
+                    event.merchantAccountId(),
+                    event.amountMinor(),
+                    event.currency(),
+                    "PayCore payment captured: " + event.paymentId()
+            );
 
-        log.info(
-                "Posted PayCore payment.captured eventId={} paymentId={} merchantAccountId={} amountMinor={} currency={}",
-                event.eventId(),
-                event.paymentId(),
-                event.merchantAccountId(),
-                event.amountMinor(),
-                event.currency()
-        );
+            log.info(
+                    "Posted PayCore payment.captured eventId={} paymentId={} merchantAccountId={} amountMinor={} currency={}",
+                    event.eventId(),
+                    event.paymentId(),
+                    event.merchantAccountId(),
+                    event.amountMinor(),
+                    event.currency()
+            );
+        } catch (Exception exception) {
+            saveDeadLetter(PAYMENT_CAPTURED_TOPIC, payload, exception);
+        }
     }
 
     @KafkaListener(
-            topics = "payment.settled",
+            topics = PAYMENT_SETTLED_TOPIC,
             groupId = "${paycore.kafka.consumer-group-id:paycore-consumer}"
     )
     public void consumePaymentSettled(String payload) {
-        PayCorePaymentSettledPayload event = parse(payload, PayCorePaymentSettledPayload.class);
+        try {
+            PayCorePaymentSettledPayload event = parse(payload, PayCorePaymentSettledPayload.class);
 
-        validatePaymentSettled(event);
+            validatePaymentSettled(event);
 
-        submitDeposit(
-                event.ownerUserId(),
-                event.eventId(),
-                event.merchantAccountId(),
-                event.amountMinor(),
-                event.currency(),
-                "PayCore payment settled: " + event.paymentId()
-        );
+            submitDeposit(
+                    event.ownerUserId(),
+                    event.eventId(),
+                    event.merchantAccountId(),
+                    event.amountMinor(),
+                    event.currency(),
+                    "PayCore payment settled: " + event.paymentId()
+            );
 
-        log.info(
-                "Posted PayCore payment.settled eventId={} paymentId={} merchantAccountId={} amountMinor={} currency={}",
-                event.eventId(),
-                event.paymentId(),
-                event.merchantAccountId(),
-                event.amountMinor(),
-                event.currency()
-        );
+            log.info(
+                    "Posted PayCore payment.settled eventId={} paymentId={} merchantAccountId={} amountMinor={} currency={}",
+                    event.eventId(),
+                    event.paymentId(),
+                    event.merchantAccountId(),
+                    event.amountMinor(),
+                    event.currency()
+            );
+        } catch (Exception exception) {
+            saveDeadLetter(PAYMENT_SETTLED_TOPIC, payload, exception);
+        }
     }
 
     private void submitDeposit(
@@ -165,5 +180,24 @@ public class PayCoreConsumer {
         if (currency == null || !currency.matches("[A-Z]{3}")) {
             throw new IllegalArgumentException("PayCore currency must be a 3-letter uppercase code");
         }
+    }
+
+    private void saveDeadLetter(
+            String sourceTopic,
+            String payload,
+            Exception exception
+    ) {
+        deadLetterEventRepository.save(
+                sourceTopic,
+                null,
+                payload,
+                exception.getMessage()
+        );
+
+        log.warn(
+                "Saved PayCore event to dead letter topic={} error={}",
+                sourceTopic,
+                exception.getMessage()
+        );
     }
 }

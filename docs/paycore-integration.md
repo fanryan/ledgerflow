@@ -18,13 +18,14 @@ The implemented slice consumes PayCore Kafka events and turns them into idempote
 - PayCore `ownerUserId` used as the LedgerFlow transaction owner.
 - PayCore `merchantAccountId` used as the LedgerFlow account id.
 - PayCore payment events submit LedgerFlow `DEPOSIT` transactions.
+- Invalid PayCore events are stored in `dead_letter_events`.
+- Dead-letter replay can route pending PayCore events back through the matching consumer.
 - Unit tests for captured and settled event handling.
+- Unit tests proving invalid captured and settled events are stored as dead letters.
 - Manual verification that captured and settled events are consumed and posted successfully.
 
 ### Not Implemented Yet
 
-- Dead-letter topic routing for invalid or repeatedly failing PayCore events.
-- Replay tooling for dead-lettered PayCore events.
 - External PayCore merchant id to LedgerFlow account mapping.
 - Separate settlement-clearing account model.
 - Testcontainers-based Kafka integration tests.
@@ -57,6 +58,29 @@ LedgerFlow transaction posting
 ```
 
 The important design choice is that PayCore events enter LedgerFlow through the same transaction service used by the HTTP API. That means PayCore ingestion reuses the existing ownership checks, currency validation, idempotency rules, ledger posting rules, optimistic locking, and outbox event creation.
+
+Invalid PayCore events follow the dead-letter path:
+
+```text
+PayCore event payload
+  |
+  v
+PayCoreConsumer
+  |
+  | parse or validation failure
+  v
+dead_letter_events row with status PENDING
+  |
+  | POST /admin/dead-letter/replay
+  v
+DeadLetterReplayService
+  |
+  +--> consumePaymentCaptured(...)
+  +--> consumePaymentSettled(...)
+  |
+  v
+dead_letter_events row marked REPLAYED
+```
 
 ## 3. Topics
 
@@ -148,7 +172,30 @@ That gives PayCore events the same guarantees as HTTP transaction submissions:
 
 The transaction service then applies LedgerFlow's normal domain checks, including account existence, ownership, account state, currency match, idempotency conflict detection, and optimistic locking.
 
-## 6. File-by-File
+## 6. Dead-Letter Handling
+
+If parsing or validation fails, `PayCoreConsumer` saves the raw payload and error message to `dead_letter_events`.
+
+The current dead-letter fields are:
+
+- `source_topic`: the Kafka topic that produced the failed event.
+- `event_key`: optional Kafka/event key. The current consumer stores `null`.
+- `payload`: raw event payload as PostgreSQL `jsonb`.
+- `error_message`: failure reason.
+- `status`: `PENDING` or `REPLAYED`.
+- `attempts`: replay count.
+- `created_at`: when the dead-letter row was created.
+- `replayed_at`: when replay marked the row as replayed.
+
+Replay is exposed through:
+
+```text
+POST /admin/dead-letter/replay?limit=10
+```
+
+The endpoint is authenticated by default. It replays pending PayCore dead letters by calling the matching consumer method based on `source_topic`.
+
+## 7. File-by-File
 
 ### `PayCoreConsumer.java`
 
@@ -163,6 +210,8 @@ payment.settled
 
 It parses each JSON payload, validates required fields, and submits a LedgerFlow deposit using `TransactionService`.
 
+Invalid events are saved through `DeadLetterEventRepository`.
+
 ### `PayCorePaymentCapturedPayload.java`
 
 Record representing the JSON payload for `payment.captured`.
@@ -173,7 +222,25 @@ Record representing the JSON payload for `payment.settled`.
 
 ### `PayCoreConsumerTest.java`
 
-Unit tests proving that both captured and settled events call `TransactionService.submitTransaction(...)` with the PayCore `eventId` as the idempotency key.
+Unit tests proving that both captured and settled events call `TransactionService.submitTransaction(...)` with the PayCore `eventId` as the idempotency key. The same test class also verifies invalid events are saved as dead letters and do not call the transaction service.
+
+### `DeadLetterEventRepository.java`
+
+Explicit JDBC repository for `dead_letter_events`.
+
+It stores raw JSONB payloads, finds pending rows, and marks replayed rows as `REPLAYED`.
+
+### `DeadLetterReplayService.java`
+
+Loads pending dead-letter rows and routes each one back to the correct PayCore consumer method.
+
+### `DeadLetterController.java`
+
+Defines:
+
+```text
+POST /admin/dead-letter/replay
+```
 
 ### `application.yml`
 
@@ -187,7 +254,7 @@ paycore:
 
 The test profile uses a separate consumer group id.
 
-## 7. Design Notes
+## 8. Design Notes
 
 PayCore integration currently chooses the simplest useful ledger behavior: both captured and settled events post deposits into the merchant account referenced by `merchantAccountId`.
 
@@ -199,10 +266,12 @@ That is enough to prove the important backend patterns:
 - double-entry ledger posting
 - retry-safe consumer behavior
 - downstream outbox event creation after ledger posting
+- dead-letter persistence for invalid events
+- admin-triggered dead-letter replay
 
-Future work can add richer settlement modeling, external id mapping, dead-letter routing, replay tooling, and Testcontainers integration tests without changing the core rule that PostgreSQL remains the source of truth.
+Future work can add richer settlement modeling, external id mapping, scheduled replay, and Testcontainers integration tests without changing the core rule that PostgreSQL remains the source of truth.
 
-## 8. Interview Questions
+## 9. Interview Questions
 
 1. **Why use the PayCore event id as the idempotency key?**  
    Because Kafka can redeliver events. The event id gives LedgerFlow a stable key to detect retries and avoid duplicate balance movement.
@@ -217,9 +286,15 @@ Future work can add richer settlement modeling, external id mapping, dead-letter
    LedgerFlow detects a request hash mismatch and rejects it as an idempotency conflict.
 
 5. **Why is this consumer still not a full production integration?**  
-   It does not yet include dead-letter routing, replay tooling, external id mapping, or Testcontainers Kafka integration tests.
+   It does not yet include external id mapping, scheduled replay, or Testcontainers Kafka integration tests.
 
-## 9. Checklist Before Moving On
+6. **What happens when a PayCore event is invalid?**  
+   The consumer stores the raw payload and error message in `dead_letter_events` with status `PENDING`.
+
+7. **How does dead-letter replay know which consumer method to call?**  
+   `DeadLetterReplayService` routes by `source_topic`: `payment.captured` calls `consumePaymentCaptured`, and `payment.settled` calls `consumePaymentSettled`.
+
+## 10. Checklist Before Moving On
 
 - [ ] Explain what PayCore is relative to LedgerFlow.
 - [ ] Explain which Kafka topics LedgerFlow consumes from PayCore.
@@ -227,4 +302,6 @@ Future work can add richer settlement modeling, external id mapping, dead-letter
 - [ ] Explain why `eventId` is the idempotency key.
 - [ ] Explain why duplicate Kafka delivery does not create duplicate balance movement.
 - [ ] Explain why the consumer calls `TransactionService`.
-- [ ] Explain what is still planned: dead-letter routing, replay, external id mapping, and Testcontainers tests.
+- [ ] Explain how invalid PayCore events become dead-letter rows.
+- [ ] Explain how pending dead-letter rows are replayed.
+- [ ] Explain what is still planned: external id mapping, scheduled replay, and Testcontainers tests.

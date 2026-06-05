@@ -110,6 +110,7 @@ Detailed implementation notes live in:
 - [Transactions](docs/transactions.md)
 - [PayCore Integration](docs/paycore-integration.md)
 - [Reconciliation](docs/reconciliation.md)
+- [Dead-Letter Replay](docs/dead-letter-replay.md)
 
 ## Repository Structure
 
@@ -151,92 +152,21 @@ ledgerflow/
 
 ## Current Status
 
-Current stage: **Milestone 3 - Transactional Outbox Publishing**
+Current stage: **Milestone 4 - Kafka Consumers, Reconciliation, and Dead-Letter Replay**
 
-Implemented:
+Implemented slices:
 
-- Repository structure
-- Docker Compose infrastructure
-- Spring Boot API skeleton
-- `/health` endpoint
-- PostgreSQL connection
-- Flyway migration setup
-- `users` table migration
-- Seed admin user migration
-- Spring Security baseline
-- `/auth/login` endpoint
-- `/auth/refresh` endpoint
-- Auth error handling for invalid credentials
-- Auth error handling for invalid refresh tokens
-- BCrypt password verification
-- JWT access token generation
-- JWT refresh token generation
-- JWT validation filter
-- `/auth/me` authenticated endpoint
-- Auth flow tests for login, refresh, invalid credentials, invalid tokens, and `/auth/me`
-- `accounts` table migration
-- `POST /accounts` authenticated account creation endpoint
-- `GET /accounts` authenticated account listing endpoint
-- `GET /accounts/{accountId}/ledger-entries` authenticated account ledger listing endpoint
-- Account ownership derived from JWT subject, not request body
-- Account request validation with clean `400` errors
-- Account flow tests for protected access, creation, listing, invalid currency, currency normalization, and ledger entry listing
-- `transactions` table migration
-- `idempotency_keys` table migration
-- `ledger_entries` table migration
-- `POST /transactions` authenticated transaction submission endpoint
-- `GET /transactions` authenticated transaction listing endpoint
-- `POST /transactions/{transactionId}/reverse` authenticated reversal endpoint
-- Idempotency lookup through `Idempotency-Key`, request hash, and stored response metadata
-- Duplicate idempotency key with a different payload returns `409`
-- Account ownership check before transaction creation
-- Transaction request validation with clean errors
-- Transaction flow tests for auth, successful submission, idempotency replay, idempotency conflict, invalid amount, and currency mismatch
-- Transaction posting updates account balances
-- Successful transactions return `POSTED`
-- Deposit and withdrawal create balanced ledger entries
-- Frozen and closed accounts cannot submit transactions
-- USD settlement system account is seeded for offset entries
-- Insufficient funds returns `422`
-- Insufficient funds records a `FAILED` transaction row
-- Idempotent retries do not update balances twice
-- Transaction reversal creates an offsetting transaction and balanced ledger entries
-- Reversal requests require an idempotency key and reason
-- Reversal idempotent retries return the original reversal result
-- Reusing a reversal idempotency key with a different payload returns `409`
-- Optimistic locking conflicts return `409 CONCURRENT_TRANSACTION_CONFLICT`
-- Concurrent withdrawal tests prove the account cannot be overdrawn by racing requests
-- `outbox_events` table migration
-- Posted transactions and reversals write `TRANSACTION_POSTED` outbox rows in the same database transaction
-- Outbox payloads are stored as PostgreSQL `jsonb`
-- Outbox event creation test verifies a posted transaction creates a pending outbox event
-- Claim-based outbox publisher with `FOR UPDATE SKIP LOCKED`
-- Stale claim recovery through `locked_until`
-- Scheduled Spring Boot outbox publisher
-- Kafka publishing to `ledger.events`
-- Spring Kafka consumer for `ledger.events`
-- `consumed_ledger_events` table migration
-- Consumed `TRANSACTION_POSTED` events are recorded idempotently
-- Duplicate consumed events are ignored through `(transaction_id, event_type)` uniqueness
-- Manual verification of published `TRANSACTION_POSTED` events being consumed and persisted
-- Published events are marked `PUBLISHED`
-- Failed publishes are marked `FAILED` with retry metadata
-- Outbox repository, publisher service, consumer, and consumed-event repository tests
-- `reconciliation_reports` table migration
-- Authenticated `POST /reconciliation/ledger-balance-check`
-- Ledger balance reconciliation checks posted transactions for debit/credit imbalances
-- Reconciliation reports persist `PASSED` or `FAILED` summaries with JSONB details
-- Manual verification passed with `checkedTransactions = 1006` and `imbalanceCount = 0`
-- Reconciliation repository, service, and flow tests
-- Spring Kafka consumer for PayCore `payment.captured`
-- Spring Kafka consumer for PayCore `payment.settled`
-- PayCore `eventId` is used as the LedgerFlow transaction idempotency key
-- PayCore payment events post idempotent LedgerFlow `DEPOSIT` transactions into the referenced merchant account
-- PayCore consumer validation covers event id, payment id, owner user id, merchant account id, positive amount, and uppercase 3-letter currency
-- PayCore captured and settled consumer tests
-- Manual verification that PayCore captured and settled events are consumed and posted successfully
+- Authenticated Spring Boot API with JWT login, refresh, and current-user lookup.
+- Account APIs with ownership derived from the JWT subject.
+- Transaction APIs with idempotency, double-entry ledger posting, reversals, insufficient-funds handling, and optimistic concurrency protection.
+- Transactional outbox with claim-based publishing to Kafka.
+- Kafka consumption for internal ledger events with idempotent consumed-event auditing.
+- PayCore event ingestion for `payment.captured` and `payment.settled`, using PayCore `eventId` as the transaction idempotency key.
+- Ledger balance reconciliation with persisted report summaries.
+- Dead-letter persistence and authenticated replay for failed PayCore events.
+- Focused unit and flow tests across auth, accounts, transactions, outbox, consumers, reconciliation, and dead-letter replay.
 
-Next: dead-letter handling and replay.
+Next: Testcontainers integration tests for PostgreSQL and Kafka.
 
 ## Local Development
 
@@ -393,10 +323,10 @@ gradle test
 - PayCore consumer for `payment.captured` and `payment.settled`
 - Consumed event audit table
 - Ledger balance reconciliation report
-- Richer reconciliation detail payloads
 - Dead-letter routing and replay
-- Scheduled reconciliation
 - Dead-letter replay tooling
+- Richer reconciliation detail payloads
+- Scheduled reconciliation
 
 ### Milestone 5
 

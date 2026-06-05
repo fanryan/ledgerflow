@@ -74,13 +74,19 @@ The Spring Boot API currently supports:
 - PayCore payment events submit LedgerFlow `DEPOSIT` transactions.
 - PayCore consumer tests for captured and settled payment events.
 - Manual verification that PayCore captured and settled events are consumed and posted successfully.
+- `dead_letter_events` table through Flyway migration `V12__create_dead_letter_events_table.sql`.
+- Invalid PayCore events are persisted as `PENDING` dead-letter rows.
+- Authenticated `POST /admin/dead-letter/replay`.
+- Dead-letter replay routes PayCore dead letters back through the matching consumer method.
+- Replayed dead-letter rows are marked `REPLAYED`.
+- Dead-letter repository, replay service, and flow tests.
 
 ### Not Implemented Yet
 
 These are planned, not implemented:
 
 - Richer system-account modeling beyond the seeded USD settlement account.
-- Projections, richer reconciliation details, scheduled reconciliation, dead-letter handling, and PayCore dead-letter replay.
+- Projections, richer reconciliation details, scheduled reconciliation, scheduled dead-letter replay, and Testcontainers Kafka integration tests.
 
 ## 2. Endpoint
 
@@ -949,6 +955,8 @@ PayCore event payload
 
 The consumer uses the existing transaction service instead of writing ledger rows directly. That keeps PayCore ingestion on the same path as HTTP transaction submission: ownership checks, account-state checks, currency validation, idempotency, optimistic locking, ledger entries, balance updates, and outbox event creation all remain centralized.
 
+Invalid PayCore events are written to `dead_letter_events` with status `PENDING`.
+
 ### `PayCorePaymentCapturedPayload.java`
 
 Record for `payment.captured` events.
@@ -956,6 +964,42 @@ Record for `payment.captured` events.
 ### `PayCorePaymentSettledPayload.java`
 
 Record for `payment.settled` events.
+
+### `DeadLetterEventRepository.java`
+
+Uses `NamedParameterJdbcTemplate` for `dead_letter_events`.
+
+Current methods:
+
+- `save(...)`
+- `findPending(...)`
+- `findById(...)`
+- `markReplayed(...)`
+
+Payloads are stored as PostgreSQL `jsonb`. Replay state is tracked through `status`, `attempts`, and `replayed_at`.
+
+### `DeadLetterReplayService.java`
+
+Replays pending dead-letter rows by routing them back through the matching consumer method.
+
+Current routing:
+
+```text
+payment.captured -> PayCoreConsumer.consumePaymentCaptured(...)
+payment.settled  -> PayCoreConsumer.consumePaymentSettled(...)
+```
+
+After replay succeeds, the row is marked `REPLAYED`.
+
+### `DeadLetterController.java`
+
+Defines:
+
+```text
+POST /admin/dead-letter/replay?limit=10
+```
+
+The endpoint is authenticated by default.
 
 ### `ReconciliationController.java`
 
@@ -1624,6 +1668,15 @@ That response means the client should reload state and decide whether to retry. 
 45. **What PayCore topics are consumed today?**  
     `payment.captured` and `payment.settled`.
 
+46. **What happens when PayCore ingestion receives an invalid event?**  
+    The raw payload and error message are stored in `dead_letter_events` with status `PENDING`.
+
+47. **How does dead-letter replay work today?**  
+    `POST /admin/dead-letter/replay` loads pending rows and routes each row back through the matching PayCore consumer method.
+
+48. **Why mark a dead-letter row as `REPLAYED`?**  
+    It creates an audit trail showing that the failed event was explicitly retried and prevents the same row from remaining in the pending replay queue.
+
 ## 18. Checklist Before Moving On
 
 Before moving on to richer reconciliation details and dead-letter handling, be able to explain:
@@ -1674,3 +1727,6 @@ Before moving on to richer reconciliation details and dead-letter handling, be a
 - [ ] How PayCore `payment.captured` and `payment.settled` become LedgerFlow transactions.
 - [ ] Why PayCore `eventId` is used as the idempotency key.
 - [ ] Why PayCore ingestion reuses `TransactionService`.
+- [ ] How invalid PayCore events are stored in `dead_letter_events`.
+- [ ] How `POST /admin/dead-letter/replay` routes pending rows.
+- [ ] Why replay marks rows as `REPLAYED`.

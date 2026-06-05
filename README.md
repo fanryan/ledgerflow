@@ -108,6 +108,7 @@ Detailed implementation notes live in:
 - [Authentication](docs/authentication.md)
 - [Accounts](docs/accounts.md)
 - [Transactions](docs/transactions.md)
+- [PayCore Integration](docs/paycore-integration.md)
 - [Reconciliation](docs/reconciliation.md)
 
 ## Repository Structure
@@ -227,8 +228,15 @@ Implemented:
 - Reconciliation reports persist `PASSED` or `FAILED` summaries with JSONB details
 - Manual verification passed with `checkedTransactions = 1006` and `imbalanceCount = 0`
 - Reconciliation repository, service, and flow tests
+- Spring Kafka consumer for PayCore `payment.captured`
+- Spring Kafka consumer for PayCore `payment.settled`
+- PayCore `eventId` is used as the LedgerFlow transaction idempotency key
+- PayCore payment events post idempotent LedgerFlow `DEPOSIT` transactions into the referenced merchant account
+- PayCore consumer validation covers event id, payment id, owner user id, merchant account id, positive amount, and uppercase 3-letter currency
+- PayCore captured and settled consumer tests
+- Manual verification that PayCore captured and settled events are consumed and posted successfully
 
-Next: richer reconciliation details and dead-letter handling.
+Next: dead-letter handling and replay.
 
 ## Local Development
 
@@ -382,7 +390,7 @@ gradle test
 ### Milestone 4
 
 - Spring Boot Kafka consumer foundation
-- PayFlow consumer for `payment.captured` and `payment.settled`
+- PayCore consumer for `payment.captured` and `payment.settled`
 - Consumed event audit table
 - Ledger balance reconciliation report
 - Richer reconciliation detail payloads

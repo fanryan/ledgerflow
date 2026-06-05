@@ -1,6 +1,6 @@
 # Transactions
 
-This document explains the current LedgerFlow transaction foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, recording `FAILED` rows for insufficient funds, reversing posted transactions with offsetting ledger entries, handling concurrent balance updates safely, writing transactional outbox rows for posted transaction events, publishing those outbox events to Kafka through a scheduled claim-based publisher, and consuming `ledger.events` into an idempotent consumed-event audit table.
+This document explains the current LedgerFlow transaction foundation. It focuses on what exists today: accepting authenticated transaction commands, validating ownership and currency, enforcing idempotency, creating balanced ledger entries, updating account balances, returning `POSTED` transaction rows, recording `FAILED` rows for insufficient funds, reversing posted transactions with offsetting ledger entries, handling concurrent balance updates safely, writing transactional outbox rows for posted transaction events, publishing those outbox events to Kafka through a scheduled claim-based publisher, consuming `ledger.events` into an idempotent consumed-event audit table, and ingesting PayCore payment events as idempotent LedgerFlow transactions.
 
 The current implementation creates two balanced ledger entries per posted transaction: one for the user account and one for the seeded USD settlement system account.
 
@@ -68,13 +68,19 @@ The Spring Boot API currently supports:
 - Reconciliation reports are persisted in `reconciliation_reports`.
 - Authenticated `POST /reconciliation/ledger-balance-check` endpoint.
 - Reconciliation repository, service, and flow tests.
+- PayCore consumer for Kafka topic `payment.captured`.
+- PayCore consumer for Kafka topic `payment.settled`.
+- PayCore `eventId` used as the LedgerFlow transaction idempotency key.
+- PayCore payment events submit LedgerFlow `DEPOSIT` transactions.
+- PayCore consumer tests for captured and settled payment events.
+- Manual verification that PayCore captured and settled events are consumed and posted successfully.
 
 ### Not Implemented Yet
 
 These are planned, not implemented:
 
 - Richer system-account modeling beyond the seeded USD settlement account.
-- Projections, richer reconciliation details, scheduled reconciliation, and dead-letter handling.
+- Projections, richer reconciliation details, scheduled reconciliation, dead-letter handling, and PayCore dead-letter replay.
 
 ## 2. Endpoint
 
@@ -922,6 +928,35 @@ Current methods:
 - `insertIfNotExists(...)`
 - `countByTransactionIdAndEventType(...)`
 
+### `PayCoreConsumer.java`
+
+Listens to upstream PayCore Kafka topics:
+
+```text
+payment.captured
+payment.settled
+```
+
+Current behavior:
+
+```text
+PayCore event payload
+  -> parse + validate
+  -> eventId as idempotency key
+  -> TransactionService.submitTransaction(...)
+  -> LedgerFlow DEPOSIT transaction
+```
+
+The consumer uses the existing transaction service instead of writing ledger rows directly. That keeps PayCore ingestion on the same path as HTTP transaction submission: ownership checks, account-state checks, currency validation, idempotency, optimistic locking, ledger entries, balance updates, and outbox event creation all remain centralized.
+
+### `PayCorePaymentCapturedPayload.java`
+
+Record for `payment.captured` events.
+
+### `PayCorePaymentSettledPayload.java`
+
+Record for `payment.settled` events.
+
 ### `ReconciliationController.java`
 
 Defines:
@@ -1580,6 +1615,15 @@ That response means the client should reload state and decide whether to retry. 
 42. **Why persist reconciliation reports?**  
     They provide an audit trail of when checks ran, what was checked, and whether the ledger passed.
 
+43. **How does PayCore ingestion avoid duplicate balance movement?**  
+    The consumer uses PayCore `eventId` as the LedgerFlow idempotency key, so redelivered events replay the existing transaction instead of posting again.
+
+44. **Why does `PayCoreConsumer` call `TransactionService`?**  
+    The transaction service already owns validation, idempotency, ledger posting, balance updates, optimistic locking, and outbox writes.
+
+45. **What PayCore topics are consumed today?**  
+    `payment.captured` and `payment.settled`.
+
 ## 18. Checklist Before Moving On
 
 Before moving on to richer reconciliation details and dead-letter handling, be able to explain:
@@ -1627,3 +1671,6 @@ Before moving on to richer reconciliation details and dead-letter handling, be a
 - [ ] How `imbalanceCount` is calculated.
 - [ ] Why reconciliation reports are persisted.
 - [ ] What the current reconciliation slice does not check yet.
+- [ ] How PayCore `payment.captured` and `payment.settled` become LedgerFlow transactions.
+- [ ] Why PayCore `eventId` is used as the idempotency key.
+- [ ] Why PayCore ingestion reuses `TransactionService`.

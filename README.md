@@ -136,15 +136,6 @@ ledgerflow/
                 ledgerflow/
       build.gradle
 
-  shared/
-    schemas/
-
-  infrastructure/
-    docker/
-    kafka/
-
-  scripts/
-  loadtests/
   docs/
 
   docker-compose.yml
@@ -152,11 +143,7 @@ ledgerflow/
   .gitignore
 ```
 
-## Current Status
-
-Current stage: **Milestone 4 - Kafka Consumers, Reconciliation, and Dead-Letter Replay**
-
-Implemented slices:
+## Implemented Features
 
 - Authenticated Spring Boot API with JWT login, refresh, and current-user lookup.
 - Account APIs with ownership derived from the JWT subject.
@@ -167,8 +154,6 @@ Implemented slices:
 - Ledger and account-balance reconciliation with persisted report summaries.
 - Dead-letter persistence and authenticated replay for failed PayCore events.
 - Focused unit, flow, and Testcontainers integration tests across auth, accounts, transactions, outbox, Kafka consumers, reconciliation, and dead-letter replay.
-
-Next: wrap-up polish, final verification, and resume/interview documentation.
 
 ## Local Development
 

@@ -1,6 +1,6 @@
 # Testing
 
-LedgerFlow uses a layered test strategy: fast unit tests for local behavior, Spring flow tests for HTTP/security paths, and Testcontainers integration tests for real PostgreSQL and Kafka behavior.
+LedgerFlow uses a layered test strategy: fast unit tests for local behavior, and containerized Spring flow and integration tests that run against real PostgreSQL and Kafka instances using Testcontainers.
 
 ## Current Coverage
 
@@ -89,21 +89,21 @@ Run the full Spring test suite:
 
 ```bash
 cd services/ledger-api
-JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home gradle test
+gradle test
 ```
 
 Run only Testcontainers support tests:
 
 ```bash
 cd services/ledger-api
-JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home gradle test --tests 'com.fanryan.ledgerflow.support.*'
+gradle test --tests 'com.fanryan.ledgerflow.support.*'
 ```
 
 Run PayCore Kafka integration tests:
 
 ```bash
 cd services/ledger-api
-JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home gradle test --tests com.fanryan.ledgerflow.paycore.PayCoreKafkaIntegrationTest
+gradle test --tests com.fanryan.ledgerflow.paycore.PayCoreKafkaIntegrationTest
 ```
 
 ## Design Notes

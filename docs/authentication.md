@@ -39,7 +39,6 @@ These are planned but not currently implemented:
 - Refresh token revocation.
 - Logout.
 - Token persistence or refresh-token database tracking.
-- Account ownership checks.
 - Role-based method annotations such as `@PreAuthorize`.
 - Full error contract coverage for every exception type.
 - Production secret management.

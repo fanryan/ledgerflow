@@ -154,6 +154,7 @@ ledgerflow/
 - Ledger and account-balance reconciliation with persisted report summaries.
 - Dead-letter persistence and authenticated replay for failed PayCore events.
 - Focused unit, flow, and Testcontainers integration tests across auth, accounts, transactions, outbox, Kafka consumers, reconciliation, and dead-letter replay.
+- Comprehensive architectural tradeoffs documentation detailing core system design decisions.
 
 ## Local Development
 
@@ -276,48 +277,3 @@ cd services/ledger-api
 gradle test
 ```
 
-## Milestones
-
-### Milestone 1
-
-- Spring Boot API
-- JWT authentication
-- Account creation
-- Account listing
-- Double-entry ledger posting for deposits and withdrawals
-- Basic transaction state machine with `PENDING` and `POSTED`
-
-### Milestone 2
-
-- Transaction `FAILED` status on insufficient funds
-- Account-state transaction guards for frozen and closed accounts
-- Reversal support with compensating ledger entries
-- Idempotent reversal retries
-- Optimistic concurrency conflict handling
-- Concurrent transaction tests
-
-### Milestone 3
-
-- Transactional outbox table and schema
-- Outbox event writes inside transaction posting/reversal workflows
-- Claim-based outbox publisher
-- Kafka publishing with retry metadata
-- Outbox publisher tests
-
-### Milestone 4
-
-- Spring Boot Kafka consumer foundation
-- PayCore consumer for `payment.captured` and `payment.settled`
-- Consumed event audit table
-- Ledger balance reconciliation report
-- Dead-letter routing and replay
-- Dead-letter replay tooling
-- Richer reconciliation detail payloads
-- Scheduled reconciliation
-
-### Milestone 5
-
-- Balance snapshot mechanism
-- Broader integration tests via Testcontainers
-- Benchmarks
-- Architecture documentation
